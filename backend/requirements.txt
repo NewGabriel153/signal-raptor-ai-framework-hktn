@@ -1,0 +1,7 @@
+FastAPI
+Uvicorn
+SQLAlchemy
+Psycopg2-binary
+Pydantic
+OpenAI
+Anthropic

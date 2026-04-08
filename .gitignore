@@ -1,0 +1,56 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+site/
+.eggs/
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+
+# Node.js
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+coverage/
+
+# Vite
+frontend/dist/
+
+# Misc
+*.pid
+*.seed
+*.out
