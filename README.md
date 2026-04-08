@@ -1,65 +1,134 @@
 # Signal Raptor Agentic Framework
 
-## System Design Document
+Signal Raptor is a containerized monorepo for building an agentic AI platform with a Vue-based control plane, a FastAPI backend, and a PostgreSQL state layer. The long-term goal is to provide a developer-facing framework for orchestrating autonomous agents, managing tools and prompts, and observing execution traces in real time.
 
-## 1. Executive Summary
+At the moment, the repository is an early scaffold: the frontend is a running Vue/Vite shell, the backend exposes a health endpoint, and Docker Compose brings up the frontend, API, and database services together for local development.
 
-The Signal Raptor Agentic Framework is a developer-centric infrastructure platform designed to orchestrate, observe, and manage autonomous AI agents. Built with a decoupled, model-agnostic architecture, the framework abstracts the complexities of LLM routing, dynamic tool execution, and state management. It provides a unified API and a real-time Control Plane for engineers to build, evaluate, and monitor multi-step AI agents.
+## Project Description
 
-The framework is optimized for production readiness, with a strong emphasis on observability through execution traces and asynchronous performance.
+The project is designed around four core responsibilities:
 
-## 2. High-Level Architecture
+- A frontend control plane for managing and monitoring agents.
+- A backend orchestration engine for agent workflows, tool execution, and API routing.
+- A PostgreSQL database for persistent state, configuration, and trace history.
+- A model-agnostic integration layer for external LLM providers.
 
-The system follows a standard three-tier architecture, engineered specifically for asynchronous LLM streaming and stateful execution traces.
+This repository is the implementation scaffold for that architecture and the base for future agent runtime, observability, and prompt-management features.
 
-### A. Control Plane (Frontend)
+## Prerequisites
 
-**Tech stack:** Vue 3, Vite, Pinia, Tailwind CSS
+Choose one of the following development paths.
 
-**Responsibility:** Acts as the developer dashboard. It provides interfaces for configuring agents, registering tools, managing prompt versions, and viewing real-time execution logs.
+### Docker workflow
 
-**Key mechanism:** Uses Server-Sent Events (SSE) or WebSockets to stream the agent's thought process and token generation in real time without polling.
+- Docker
+- Docker Compose
 
-### B. Agentic Engine (Backend)
+### Local workflow
 
-**Tech stack:** Python, FastAPI, Pydantic, SQLAlchemy
+- Python 3.9+
+- Node.js 16+
+- npm
 
-**Responsibility:** Serves as the core orchestration layer. It handles the business logic of receiving user inputs, assembling prompt context, routing requests to the external LLM, executing local Python tools dynamically, and managing the iterative ReAct reasoning loop.
+## Setup
 
-**Key mechanism:** Highly asynchronous execution. Tool runs are isolated, and all LLM interactions are logged in detail to maximize observability.
+### Run with Docker Compose
 
-### C. State and Memory (Database)
+From the repository root:
 
-**Tech stack:** PostgreSQL 15
+```bash
+docker compose up --build
+```
 
-**Responsibility:** Acts as the single source of truth for the framework. It stores relational data for agent configurations, tool schemas, and the complete historical trace of every session and execution step.
+Available services:
 
-### D. External LLM Provider
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:8000
+- Health check: http://localhost:8000/api/v1/health
 
-**Target:** Google AI Studio (Gemini 1.5 Pro / Flash)
+To stop the stack:
 
-**Responsibility:** Provides the reasoning engine and function-calling capabilities. The system is designed to be model-agnostic, allowing providers to be swapped through environment variables and API abstractions, while defaulting to Gemini for its large context window and native tool-calling reliability.
+```bash
+docker compose down
+```
 
-## 3. System Architecture Diagram
+### Run locally without Docker
 
-[View Diagram](https://drive.google.com/file/d/1vhWqiK3Aw5bgLLQGvdQ2WNO5JurG8ceh/view?usp=sharing)
+Start the backend:
 
-## 4. Core Orchestration and Data Flow
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
 
-When a request is initiated from the Control Plane, the framework starts the ReAct (Reason + Act) loop. The FastAPI backend serves as the traffic controller between the user's input, the database's historical context, the registered Python functions, and the external LLM's reasoning engine. Every step is captured as an execution trace.
+Start the frontend in a second terminal:
 
-**Agentic Execution Loop (Sequence Diagram):**
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-[View Diagram](https://drive.google.com/file/d/1akgkBY0Y-JBB0_aKvq6trT8wLsYMrtYW/view?usp=sharing)
+The current scaffold does not require environment variables to boot locally. PostgreSQL is provisioned in Docker Compose for the intended full-stack architecture, but the checked-in backend code is not yet wired to the database at runtime.
 
-## 5. Database Schema and State Management
+## Architecture Summary
 
-The database schema is strictly relational to support reliable querying of execution logs and framework configurations. It maps tools to specific agents and preserves the chronological sequence of all session traces for the observability dashboard.
+### Frontend
 
-**Entity Relationship Diagram (ERD):**
+- Stack: Vue 3, Vite, Vue Router, Pinia
+- Role: control plane UI for the framework
+- Current state: starter application served on port 5173
 
-[View Diagram](https://drive.google.com/file/d/1O-zjkhnBRAkUbk_ybccNUkcQ-v6bPzKB/view?usp=sharing)
+### Backend
 
-## 6. Deployment and Infrastructure
+- Stack: FastAPI, Pydantic, SQLAlchemy
+- Role: API layer and future agent orchestration engine
+- Current state: minimal FastAPI service with a health endpoint on port 8000
 
-The entire framework is deployed as a monorepo and containerized with Docker. The root `docker-compose.yml` orchestrates the isolated network, binding the Vue frontend, FastAPI backend, and PostgreSQL database into a unified local development environment. This ensures portability and keeps the system structurally ready for cloud deployment.
+### Database
+
+- Stack: PostgreSQL 15
+- Role: persistent storage for agent state, tool metadata, and execution traces
+- Current state: available through Docker Compose as the planned state layer
+
+### LLM Integration
+
+- Target direction: model-agnostic provider abstraction
+- Planned default: Google AI Studio with Gemini models
+- Current state: architecture goal documented, not yet implemented in the runtime flow
+
+## Repository Structure
+
+```text
+.
+├── backend/
+│   ├── app/
+│   ├── main.py
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.ts
+└── docker-compose.yml
+```
+
+## Design Documents
+
+- System design document PDF: https://drive.google.com/file/d/1hSWtKbkNTE6xA-qRW10wXQ4ChpsoQGqK/view?usp=sharing
+- System architecture diagram: https://drive.google.com/file/d/1vhWqiK3Aw5bgLLQGvdQ2WNO5JurG8ceh/view?usp=sharing
+- Agentic execution loop sequence diagram: https://drive.google.com/file/d/1akgkBY0Y-JBB0_aKvq6trT8wLsYMrtYW/view?usp=sharing
+- Database schema and ERD: https://drive.google.com/file/d/1O-zjkhnBRAkUbk_ybccNUkcQ-v6bPzKB/view?usp=sharing
+
+## Current Status
+
+The repository currently provides:
+
+- A Dockerized local development environment
+- A Vue frontend starter application
+- A FastAPI backend starter service
+- A PostgreSQL service definition for future persistence work
+
+The agent execution loop, tool registration flow, prompt management, real-time observability features, and LLM provider integration are part of the intended architecture and design documents, but are not fully implemented in the current codebase yet.
