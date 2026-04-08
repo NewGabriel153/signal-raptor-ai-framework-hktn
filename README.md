@@ -42,7 +42,7 @@ The system follows a standard three-tier architecture, engineered specifically f
 
 ## 3. System Architecture Diagram
 
-[View Diagram](https://mermaid.ai/d/f14914a0-11e4-4377-81b7-1da271bff374)
+[View Diagram](https://drive.google.com/file/d/1vhWqiK3Aw5bgLLQGvdQ2WNO5JurG8ceh/view?usp=sharing)
 
 ## 4. Core Orchestration and Data Flow
 
@@ -50,7 +50,7 @@ When a request is initiated from the Control Plane, the framework starts the ReA
 
 **Agentic Execution Loop (Sequence Diagram):**
 
-[View Diagram](https://mermaid.ai/view/a0c97861-87a2-4c60-b64f-18726be89074)
+[View Diagram](https://drive.google.com/file/d/1akgkBY0Y-JBB0_aKvq6trT8wLsYMrtYW/view?usp=sharing)
 
 ## 5. Database Schema and State Management
 
@@ -58,7 +58,7 @@ The database schema is strictly relational to support reliable querying of execu
 
 **Entity Relationship Diagram (ERD):**
 
-[View Diagram](https://mermaid.ai/d/a0c97861-87a2-4c60-b64f-18726be89074)
+[View Diagram](https://drive.google.com/file/d/1O-zjkhnBRAkUbk_ybccNUkcQ-v6bPzKB/view?usp=sharing)
 
 ## 6. Deployment and Infrastructure
 
