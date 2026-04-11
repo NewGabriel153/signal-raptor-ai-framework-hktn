@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "mydatabase"
     ECHO_SQL: bool = False
+    REDIS_URL: Optional[str] = None
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: Optional[str] = None
+    ARQ_QUEUE_NAME: str = "signal-raptor-runs"
+    ARQ_MAX_JOBS: int = 10
 
     @property
     def async_database_url(self) -> str:
@@ -38,6 +45,18 @@ class Settings(BaseSettings):
     @property
     def sync_database_url(self) -> str:
         return self.async_database_url.replace("+asyncpg", "")
+
+    @property
+    def redis_dsn(self) -> str:
+        if self.REDIS_URL:
+            return self.REDIS_URL
+
+        if self.REDIS_PASSWORD:
+            credentials = f":{self.REDIS_PASSWORD}@"
+        else:
+            credentials = ""
+
+        return f"redis://{credentials}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
 
 settings = Settings()
