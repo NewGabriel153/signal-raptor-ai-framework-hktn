@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = None
     ARQ_QUEUE_NAME: str = "signal-raptor-runs"
     ARQ_MAX_JOBS: int = 10
+    GOOGLE_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
+    LLM_REQUEST_TIMEOUT: int = 120
 
     @property
     def async_database_url(self) -> str:
