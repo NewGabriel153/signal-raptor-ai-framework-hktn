@@ -1,6 +1,6 @@
 from app.schemas.agent import AgentCreate, AgentList, AgentRead, AgentUpdate
 from app.schemas.health import HealthResponse
-from app.schemas.run import ExecutionLogRead, RunCreate, RunEnqueueResponse, RunRead
+from app.schemas.run import ExecutionLogRead, RunCreate, RunEnqueueResponse, RunRead, SessionRunRequest
 from app.schemas.tool import ToolCreate, ToolList, ToolRead, ToolUpdate
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
 	"RunCreate",
 	"RunEnqueueResponse",
 	"RunRead",
+	"SessionRunRequest",
 	"ToolCreate",
 	"ToolList",
 	"ToolRead",

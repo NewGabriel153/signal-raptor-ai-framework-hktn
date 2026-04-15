@@ -10,6 +10,10 @@ class RunCreate(BaseModel):
     prompt: str = Field(min_length=1)
 
 
+class SessionRunRequest(BaseModel):
+    prompt: str = Field(min_length=1)
+
+
 class RunEnqueueResponse(BaseModel):
     session_id: UUID
     job_id: str

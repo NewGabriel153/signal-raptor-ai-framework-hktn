@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.agent_tools import router as agent_tools_router
 from app.api.agents import router as agents_router
 from app.api.runs import router as runs_router
+from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
 from app.core.database import get_db_session
 from app.schemas import HealthResponse
@@ -35,3 +36,4 @@ api_router.include_router(agents_router)
 api_router.include_router(tools_router)
 api_router.include_router(agent_tools_router)
 api_router.include_router(runs_router)
+api_router.include_router(sessions_router)
