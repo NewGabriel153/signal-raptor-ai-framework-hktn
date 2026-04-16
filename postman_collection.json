@@ -1,0 +1,363 @@
+{
+  "info": {
+    "_postman_id": "6a0d1dc5-beca-4ce8-acde-a954492f2bf1",
+    "name": "Signal Raptor Agentic Framework API",
+    "description": "Postman collection for the current Signal Raptor core API surface. Create Agent, Create Tool, and Enqueue Run requests automatically persist returned IDs into collection variables for chained testing.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "agent_id",
+      "value": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "key": "tool_id",
+      "value": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "key": "session_id",
+      "value": "33333333-3333-3333-3333-333333333333"
+    },
+    {
+      "key": "run_id",
+      "value": "33333333-3333-3333-3333-333333333333"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/health",
+            "description": "Validate that the API process is reachable and the database connection is healthy."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"Database connectivity is reported\", function () {",
+                  "    pm.expect(payload.database_connected).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Agents",
+      "item": [
+        {
+          "name": "Create Agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Operations Assistant\",\n  \"description\": \"Handles operational status and workflow questions.\",\n  \"model_provider\": \"google_genai\",\n  \"target_model\": \"gemini-1.5-pro\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/agents/",
+            "description": "Create an agent record for queued and streaming runs. Saves the returned id into the collection variable agent_id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const payload = pm.response.json();",
+                  "if (payload.id) {",
+                  "    pm.collectionVariables.set(\"agent_id\", payload.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "List Agents",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/agents/",
+            "description": "List all persisted agents in reverse creation order."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Agent",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/agents/{{agent_id}}",
+            "description": "Retrieve one agent by UUID."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Agent",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Handles operational updates, summaries, and status checks.\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/agents/{{agent_id}}",
+            "description": "Update a subset of agent fields."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Agent",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/agents/{{agent_id}}",
+            "description": "Delete an agent and cascade related rows."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Tools",
+      "item": [
+        {
+          "name": "Create Tool",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"calculator\",\n  \"description\": \"Performs basic arithmetic operations.\",\n  \"json_schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"operation\": {\n        \"type\": \"string\",\n        \"enum\": [\"add\", \"subtract\", \"multiply\", \"divide\"],\n        \"description\": \"Math operation to execute.\"\n      },\n      \"a\": {\n        \"type\": \"number\",\n        \"description\": \"First operand.\"\n      },\n      \"b\": {\n        \"type\": \"number\",\n        \"description\": \"Second operand.\"\n      }\n    },\n    \"required\": [\"operation\", \"a\", \"b\"]\n  },\n  \"python_function_name\": \"calculator\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/tools/",
+            "description": "Create a tool definition. Saves the returned id into the collection variable tool_id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const payload = pm.response.json();",
+                  "if (payload.id) {",
+                  "    pm.collectionVariables.set(\"tool_id\", payload.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "List Tools",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/tools/",
+            "description": "List all persisted tool definitions."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Tool",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/tools/{{tool_id}}",
+            "description": "Retrieve one tool by UUID."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Tool",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Performs arithmetic for agent tool calls.\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/tools/{{tool_id}}",
+            "description": "Update a subset of tool metadata."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Tool",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/tools/{{tool_id}}",
+            "description": "Delete one tool by UUID."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Agent Tools",
+      "item": [
+        {
+          "name": "Assign Tool To Agent",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/api/v1/agents/{{agent_id}}/tools/{{tool_id}}",
+            "description": "Associate an existing tool with an existing agent."
+          },
+          "response": []
+        },
+        {
+          "name": "List Agent Tools",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/agents/{{agent_id}}/tools",
+            "description": "List all tools currently assigned to the selected agent."
+          },
+          "response": []
+        },
+        {
+          "name": "Remove Tool From Agent",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/api/v1/agents/{{agent_id}}/tools/{{tool_id}}",
+            "description": "Remove a tool assignment from an agent."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Runs",
+      "item": [
+        {
+          "name": "Enqueue Run",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agent_id\": \"{{agent_id}}\",\n  \"prompt\": \"Summarize the current deployment status and list any blockers.\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/runs/",
+            "description": "Queue a background run for the selected agent. Saves the returned session id into both session_id and run_id collection variables."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 202\", function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "const payload = pm.response.json();",
+                  "if (payload.session_id) {",
+                  "    pm.collectionVariables.set(\"session_id\", payload.session_id);",
+                  "    pm.collectionVariables.set(\"run_id\", payload.session_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "Get Run",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/runs/{{run_id}}",
+            "description": "Fetch session status and execution logs for a queued run."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Sessions",
+      "item": [
+        {
+          "name": "Run Session Stream",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Use any available tools to solve 12 multiplied by 8 and explain the answer.\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/sessions/{{session_id}}/run",
+            "description": "Invoke the streaming session execution endpoint. This path is partially implemented and requires a valid provider adapter configuration to exercise real model behavior."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
