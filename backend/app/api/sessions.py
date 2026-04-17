@@ -15,9 +15,9 @@ from sqlalchemy.orm import selectinload
 
 from app.adapters import LLMAdapterError, create_adapter
 from app.core.database import get_db_session
-from app.models import ExecutionLog, Session
+from app.models import Agent, ExecutionLog, Session
 from app.orchestrator import run_agent_session
-from app.schemas import SessionRunRequest
+from app.schemas import SessionCreateRequest, SessionRead, SessionRunRequest
 from app.tools import get_tool_registry
 
 
@@ -94,6 +94,22 @@ async def _persist_stream_setup_failure(
     except Exception:
         logger.exception("Failed to persist stream setup failure for session %s.", session_id)
         await _safe_rollback(db)
+
+
+@router.post("/", response_model=SessionRead, status_code=status.HTTP_201_CREATED)
+async def create_session(
+    payload: SessionCreateRequest,
+    db: AsyncSession = Depends(get_db_session),
+) -> Session:
+    agent = await db.get(Agent, payload.agent_id)
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found.")
+
+    session_record = Session(agent_id=payload.agent_id, status="active")
+    db.add(session_record)
+    await db.commit()
+    await db.refresh(session_record)
+    return session_record
 
 
 @router.post("/{session_id}/run")

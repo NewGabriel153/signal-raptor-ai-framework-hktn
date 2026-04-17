@@ -10,6 +10,20 @@ class RunCreate(BaseModel):
     prompt: str = Field(min_length=1)
 
 
+class SessionCreateRequest(BaseModel):
+    agent_id: UUID
+
+
+class SessionRead(BaseModel):
+    id: UUID
+    agent_id: UUID
+    status: str
+    start_time: datetime
+    end_time: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SessionRunRequest(BaseModel):
     prompt: str = Field(min_length=1)
 
