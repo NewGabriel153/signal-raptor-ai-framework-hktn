@@ -14,12 +14,24 @@
           <h2 class="mt-1.5 text-sm font-semibold text-white">Session History</h2>
         </div>
 
-        <div class="border-b border-white/10 px-3 py-3">
+        <div class="border-b border-white/10 px-3 py-3 space-y-2">
           <button
             class="w-full rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100 transition hover:border-cyan-200/60 hover:bg-cyan-300/20"
             @click="handleNewSession"
           >
             + New Session
+          </button>
+          <button
+            class="w-full rounded-xl border border-amber-300/30 bg-amber-300/10 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-amber-100 transition hover:border-amber-200/60 hover:bg-amber-300/20"
+            @click="showAgentModal = true"
+          >
+            + New Agent
+          </button>
+          <button
+            class="w-full rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100 transition hover:border-emerald-200/60 hover:bg-emerald-300/20"
+            @click="showToolModal = true"
+          >
+            + Register Tool
           </button>
         </div>
 
@@ -214,6 +226,9 @@
       </section>
       </div>
     </div>
+
+    <AgentModal v-if="showAgentModal" @close="showAgentModal = false" />
+    <ToolModal v-if="showToolModal" @close="showToolModal = false" />
   </main>
 </template>
 
@@ -221,11 +236,15 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 
+import AgentModal from '../components/AgentModal.vue';
+import ToolModal from '../components/ToolModal.vue';
 import { useSessionStore, type ExecutionTrace, type SessionSummary } from '../stores/sessionStore';
 
 const sessionStore = useSessionStore();
 const { activeSessionId, agents, chatMessages, executionTraces, isStreaming, sessionHistory, isLoadingHistory, isLoadingSession } = storeToRefs(sessionStore);
 
+const showAgentModal = ref(false);
+const showToolModal = ref(false);
 const promptDraft = ref('');
 const formError = ref('');
 const selectedAgentId = ref('');
