@@ -192,6 +192,13 @@ def _classify_client_error(exc: genai_errors.ClientError) -> LLMAdapterError:
     msg = str(exc)
     if code in (401, 403):
         return LLMAuthenticationError(f"Gemini authentication failed: {msg}")
+    if code == 404:
+        return LLMAdapterError(
+            "Gemini model not found or unsupported for generateContent. "
+            f"Provider response: {msg}. "
+            "Use a supported model ID such as 'gemini-2.5-flash', 'gemini-2.5-pro', "
+            "'gemini-3-flash-preview', or 'gemini-3.1-flash-lite-preview'."
+        )
     if code == 429:
         return LLMRateLimitError(f"Gemini rate limit exceeded: {msg}")
     return LLMAdapterError(f"Gemini client error ({code}): {msg}")
