@@ -27,6 +27,34 @@ export interface ExecutionTrace {
   createdAt: string;
 }
 
+export interface SessionSummary {
+  id: string;
+  agent_id: string;
+  status: string;
+  start_time: string;
+  end_time: string | null;
+}
+
+interface ExecutionLogEntry {
+  id: string;
+  step_sequence: number;
+  role: string;
+  content: string | null;
+  tool_calls: Record<string, unknown> | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  created_at: string;
+}
+
+interface SessionLogsResponse {
+  id: string;
+  agent_id: string;
+  status: string;
+  start_time: string;
+  end_time: string | null;
+  execution_logs: ExecutionLogEntry[];
+}
+
 interface AgentListResponse {
   items: Agent[];
   count: number;
@@ -70,6 +98,9 @@ export const useSessionStore = defineStore('session', {
     chatMessages: [] as ChatMessage[],
     executionTraces: [] as ExecutionTrace[],
     isStreaming: false,
+    sessionHistory: [] as SessionSummary[],
+    isLoadingHistory: false,
+    isLoadingSession: false,
   }),
 
   actions: {
@@ -95,6 +126,84 @@ export const useSessionStore = defineStore('session', {
       if (messageIndex >= 0 && !this.chatMessages[messageIndex].content.trim()) {
         this.chatMessages.splice(messageIndex, 1);
       }
+    },
+
+    async fetchSessions() {
+      this.isLoadingHistory = true;
+      try {
+        const response = await fetch(`${API_BASE_URL}/sessions/`);
+        if (!response.ok) {
+          throw new Error(`Failed to load sessions (${response.status}).`);
+        }
+        this.sessionHistory = (await response.json()) as SessionSummary[];
+      } catch (error) {
+        this.pushTrace('error', 'sessions.fetch_failed', { message: getErrorMessage(error) });
+      } finally {
+        this.isLoadingHistory = false;
+      }
+    },
+
+    async loadSession(sessionId: string) {
+      this.isLoadingSession = true;
+      try {
+        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/logs`);
+        if (!response.ok) {
+          throw new Error(`Failed to load session logs (${response.status}).`);
+        }
+
+        const payload = (await response.json()) as SessionLogsResponse;
+
+        const chatMessages: ChatMessage[] = [];
+        const executionTraces: ExecutionTrace[] = [];
+
+        for (const log of payload.execution_logs) {
+          if (log.role === 'user' || log.role === 'assistant') {
+            chatMessages.push({
+              id: log.id,
+              role: log.role as 'user' | 'assistant',
+              content: log.content ?? '',
+            });
+          } else if (log.role === 'tool' && log.tool_calls) {
+            executionTraces.push({
+              id: log.id,
+              type: 'tool_call',
+              label: (log.tool_calls as Record<string, unknown>).name as string ?? 'tool.call',
+              payload: log.tool_calls,
+              createdAt: log.created_at,
+            });
+          } else if (log.role === 'tool') {
+            executionTraces.push({
+              id: log.id,
+              type: 'tool_result',
+              label: 'tool.result',
+              payload: log.content,
+              createdAt: log.created_at,
+            });
+          } else {
+            executionTraces.push({
+              id: log.id,
+              type: 'status',
+              label: log.role,
+              payload: log.content ?? log.tool_calls,
+              createdAt: log.created_at,
+            });
+          }
+        }
+
+        this.activeSessionId = payload.id;
+        this.chatMessages = chatMessages;
+        this.executionTraces = executionTraces;
+      } catch (error) {
+        this.pushTrace('error', 'session.load_failed', { message: getErrorMessage(error) });
+      } finally {
+        this.isLoadingSession = false;
+      }
+    },
+
+    clearSession() {
+      this.activeSessionId = null;
+      this.chatMessages = [];
+      this.executionTraces = [];
     },
 
     async fetchAgents() {

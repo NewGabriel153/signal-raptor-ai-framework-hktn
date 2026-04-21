@@ -17,7 +17,7 @@ from app.adapters import LLMAdapterError, create_adapter
 from app.core.database import get_db_session
 from app.models import Agent, ExecutionLog, Session
 from app.orchestrator import run_agent_session
-from app.schemas import SessionCreateRequest, SessionRead, SessionRunRequest
+from app.schemas import ExecutionLogRead, RunRead, SessionCreateRequest, SessionRead, SessionRunRequest
 from app.tools import get_tool_registry
 
 
@@ -94,6 +94,32 @@ async def _persist_stream_setup_failure(
     except Exception:
         logger.exception("Failed to persist stream setup failure for session %s.", session_id)
         await _safe_rollback(db)
+
+
+@router.get("/", response_model=list[SessionRead])
+async def list_sessions(
+    db: AsyncSession = Depends(get_db_session),
+) -> list[Session]:
+    result = await db.execute(
+        select(Session).order_by(Session.start_time.desc())
+    )
+    return list(result.scalars().all())
+
+
+@router.get("/{session_id}/logs", response_model=RunRead)
+async def get_session_logs(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db_session),
+) -> Session:
+    result = await db.execute(
+        select(Session)
+        .options(selectinload(Session.execution_logs))
+        .where(Session.id == session_id)
+    )
+    run_session = result.scalar_one_or_none()
+    if run_session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+    return run_session
 
 
 @router.post("/", response_model=SessionRead, status_code=status.HTTP_201_CREATED)

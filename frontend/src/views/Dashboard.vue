@@ -1,13 +1,68 @@
 <template>
   <main class="dark min-h-screen overflow-hidden bg-slate-950 text-slate-100">
-    <div class="relative isolate min-h-screen">
+    <div class="relative isolate flex min-h-screen">
       <div class="pointer-events-none absolute inset-0 overflow-hidden">
         <div class="absolute left-[-8rem] top-[-6rem] h-72 w-72 rounded-full bg-cyan-400/18 blur-3xl" />
         <div class="absolute bottom-[-10rem] right-[-3rem] h-96 w-96 rounded-full bg-amber-400/14 blur-3xl" />
         <div class="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.08)_1px,transparent_1px)] bg-[size:64px_64px] opacity-20" />
       </div>
 
-      <section class="relative mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+      <!-- Session History Sidebar -->
+      <nav class="relative z-10 flex w-64 shrink-0 flex-col border-r border-white/10 bg-slate-900/80 backdrop-blur-xl">
+        <div class="border-b border-white/10 px-4 py-5">
+          <p class="text-[0.65rem] font-medium uppercase tracking-[0.4em] text-cyan-300/70">Observability</p>
+          <h2 class="mt-1.5 text-sm font-semibold text-white">Session History</h2>
+        </div>
+
+        <div class="border-b border-white/10 px-3 py-3">
+          <button
+            class="w-full rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100 transition hover:border-cyan-200/60 hover:bg-cyan-300/20"
+            @click="handleNewSession"
+          >
+            + New Session
+          </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-2 py-2">
+          <div v-if="isLoadingHistory" class="flex items-center justify-center py-8">
+            <div class="h-5 w-5 animate-spin rounded-full border-2 border-cyan-300/30 border-t-cyan-300" />
+          </div>
+
+          <div v-else-if="!sessionHistory.length" class="px-2 py-6 text-center text-xs text-slate-500">
+            No past sessions found.
+          </div>
+
+          <button
+            v-for="session in sessionHistory"
+            :key="session.id"
+            class="mb-1 w-full rounded-xl px-3 py-2.5 text-left transition"
+            :class="session.id === activeSessionId
+              ? 'border border-cyan-300/30 bg-cyan-300/10 text-cyan-100'
+              : 'border border-transparent text-slate-400 hover:border-white/10 hover:bg-white/5 hover:text-slate-200'"
+            @click="handleLoadSession(session.id)"
+          >
+            <p class="truncate text-xs font-medium">{{ session.id.slice(0, 8) }}</p>
+            <p class="mt-0.5 text-[0.65rem] text-slate-500">
+              {{ formatSessionDate(session.start_time) }}
+              <span class="ml-1 rounded-full px-1.5 py-0.5 text-[0.6rem]"
+                :class="session.status === 'active' ? 'bg-emerald-400/15 text-emerald-300' : 'bg-white/5 text-slate-500'">
+                {{ session.status }}
+              </span>
+            </p>
+          </button>
+        </div>
+      </nav>
+
+      <!-- Main Content -->
+      <div class="relative flex min-h-screen flex-1 flex-col">
+        <div v-if="isLoadingSession" class="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm">
+          <div class="flex flex-col items-center gap-3">
+            <div class="h-8 w-8 animate-spin rounded-full border-2 border-cyan-300/30 border-t-cyan-300" />
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-400">Loading session…</p>
+          </div>
+        </div>
+
+      <section class="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
         <header class="mb-6 flex flex-col gap-4 rounded-[2rem] border border-white/10 bg-white/5 px-5 py-5 shadow-panel backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p class="text-xs font-medium uppercase tracking-[0.45em] text-cyan-300/80">Signal Raptor</p>
@@ -157,6 +212,7 @@
           </aside>
         </div>
       </section>
+      </div>
     </div>
   </main>
 </template>
@@ -165,10 +221,10 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 
-import { useSessionStore, type ExecutionTrace } from '../stores/sessionStore';
+import { useSessionStore, type ExecutionTrace, type SessionSummary } from '../stores/sessionStore';
 
 const sessionStore = useSessionStore();
-const { activeSessionId, agents, chatMessages, executionTraces, isStreaming } = storeToRefs(sessionStore);
+const { activeSessionId, agents, chatMessages, executionTraces, isStreaming, sessionHistory, isLoadingHistory, isLoadingSession } = storeToRefs(sessionStore);
 
 const promptDraft = ref('');
 const formError = ref('');
@@ -223,6 +279,12 @@ function formatTimestamp(value: string): string {
   });
 }
 
+function formatSessionDate(value: string): string {
+  const d = new Date(value);
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function traceToneClass(type: ExecutionTrace['type']): string {
   switch (type) {
     case 'tool_call':
@@ -234,6 +296,17 @@ function traceToneClass(type: ExecutionTrace['type']): string {
     default:
       return 'border-white/10 bg-white/5 text-slate-200';
   }
+}
+
+function handleNewSession() {
+  sessionStore.clearSession();
+  promptDraft.value = '';
+  formError.value = '';
+}
+
+async function handleLoadSession(sessionId: string) {
+  formError.value = '';
+  await sessionStore.loadSession(sessionId);
 }
 
 async function handleCreateSession() {
@@ -269,12 +342,15 @@ async function handleSubmitPrompt() {
 
 onMounted(async () => {
   try {
-    await sessionStore.fetchAgents();
+    await Promise.all([
+      sessionStore.fetchAgents(),
+      sessionStore.fetchSessions(),
+    ]);
     if (agents.value.length > 0) {
       selectedAgentId.value = agents.value[0].id;
     }
   } catch (error) {
-    formError.value = error instanceof Error ? error.message : 'Unable to load agents.';
+    formError.value = error instanceof Error ? error.message : 'Unable to load initial data.';
   }
 });
 
