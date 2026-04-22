@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.adapters import LLMAdapterError, create_adapter
+from app.adapters import AdapterFactory, LLMAdapterError
 from app.core.config import settings
 from app.core.database import AsyncSessionFactory
 from app.core.queue import get_redis_settings
@@ -130,7 +130,7 @@ async def process_agent_run(_: dict[str, Any], session_id: str, prompt: str) -> 
 
             # --- attempt real LLM call via adapter -------------------------
             try:
-                adapter = create_adapter(agent.target_model)
+                adapter = AdapterFactory.get_adapter(agent.model_provider, agent.target_model)
             except LLMAdapterError as exc:
                 next_step = _append_log(
                     db_session, run_id, next_step, "system",

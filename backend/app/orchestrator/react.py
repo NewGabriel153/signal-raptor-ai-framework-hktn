@@ -211,6 +211,7 @@ async def run_agent_session(
 
         for _ in range(MAX_ITERATIONS):
             try:
+                print(f"DEBUG: Tools fetched from DB: {tool_schemas}")
                 llm_response = await adapter.generate(
                     messages=conversation_history,
                     tools=tool_schemas or None,

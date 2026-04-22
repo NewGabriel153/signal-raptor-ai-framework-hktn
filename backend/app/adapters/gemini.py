@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -30,53 +32,63 @@ logger = logging.getLogger(__name__)
 
 _MAX_RETRIES: int = 3
 _BASE_RETRY_DELAY: float = 1.0  # seconds; doubles each attempt
-
-_JSON_SCHEMA_TYPE_TO_GEMINI: dict[str, str] = {
-    "string": "STRING",
-    "number": "NUMBER",
-    "integer": "INTEGER",
-    "boolean": "BOOLEAN",
-    "array": "ARRAY",
-    "object": "OBJECT",
-}
+_MAX_FUNCTION_NAME_LENGTH: int = 128
+_INVALID_FUNCTION_NAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_.:-]")
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers – message / tool conversion
 # ---------------------------------------------------------------------------
 
-def _upcase_schema_types(schema: dict[str, Any]) -> dict[str, Any]:
-    """Recursively convert lowercase JSON-Schema ``type`` values to Gemini's
-    uppercase enum strings (``STRING``, ``OBJECT``, …)."""
-    out: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key == "type" and isinstance(value, str):
-            out[key] = _JSON_SCHEMA_TYPE_TO_GEMINI.get(value.lower(), value.upper())
-        elif isinstance(value, dict):
-            out[key] = _upcase_schema_types(value)
-        elif isinstance(value, list):
-            out[key] = [
-                _upcase_schema_types(item) if isinstance(item, dict) else item
-                for item in value
-            ]
-        else:
-            out[key] = value
-    return out
+
+def _sanitise_function_name(name: str) -> str:
+    candidate = _INVALID_FUNCTION_NAME_CHARS_RE.sub("_", (name or "").strip()) or "tool"
+    if not (candidate[0].isalpha() or candidate[0] == "_"):
+        candidate = f"_{candidate}"
+    return candidate[:_MAX_FUNCTION_NAME_LENGTH]
+
+
+def _build_tool_name_mappings(
+    tools: list[dict[str, Any]] | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    original_to_provider: dict[str, str] = {}
+    provider_to_original: dict[str, str] = {}
+    used_provider_names: set[str] = set()
+
+    for tool in tools or []:
+        original_name = str(tool["name"])
+        provider_name = _sanitise_function_name(original_name)
+
+        if provider_name != original_name:
+            suffix = hashlib.sha1(original_name.encode("utf-8")).hexdigest()[:8]
+            base_length = _MAX_FUNCTION_NAME_LENGTH - len(suffix) - 1
+            provider_name = f"{provider_name[:base_length]}_{suffix}"
+
+        collision_index = 1
+        while provider_name in used_provider_names:
+            suffix = hashlib.sha1(f"{original_name}:{collision_index}".encode("utf-8")).hexdigest()[:8]
+            base_length = _MAX_FUNCTION_NAME_LENGTH - len(suffix) - 1
+            provider_name = f"{provider_name[:base_length]}_{suffix}"
+            collision_index += 1
+
+        used_provider_names.add(provider_name)
+        original_to_provider[original_name] = provider_name
+        provider_to_original[provider_name] = original_name
+
+    return original_to_provider, provider_to_original
 
 
 def _build_function_declarations(
     tools: list[dict[str, Any]],
+    original_to_provider: dict[str, str],
 ) -> list[types.FunctionDeclaration]:
     declarations: list[types.FunctionDeclaration] = []
     for tool in tools:
-        params = tool.get("parameters")
-        if params:
-            params = _upcase_schema_types(params)
         declarations.append(
             types.FunctionDeclaration(
-                name=tool["name"],
+                name=original_to_provider.get(tool["name"], tool["name"]),
                 description=tool.get("description", ""),
-                parameters=params,
+                parameters_json_schema=tool.get("parameters"),
             )
         )
     return declarations
@@ -84,6 +96,7 @@ def _build_function_declarations(
 
 def _convert_messages(
     messages: list[dict[str, Any]],
+    original_to_provider: dict[str, str],
 ) -> tuple[str | None, list[types.Content]]:
     """Split a system instruction out of the message list and convert the
     remaining messages to Gemini ``Content`` objects."""
@@ -111,9 +124,10 @@ def _convert_messages(
             if text:
                 parts.append(types.Part.from_text(text=text))
             for tc in msg.get("tool_calls", []):
+                tool_name = original_to_provider.get(tc["name"], tc["name"])
                 parts.append(
                     types.Part.from_function_call(
-                        name=tc["name"],
+                        name=tool_name,
                         args=tc.get("arguments", {}),
                     )
                 )
@@ -132,7 +146,10 @@ def _convert_messages(
                     role="user",
                     parts=[
                         types.Part.from_function_response(
-                            name=msg.get("name", "unknown"),
+                            name=original_to_provider.get(
+                                msg.get("name", "unknown"),
+                                msg.get("name", "unknown"),
+                            ),
                             response=response_data,
                         )
                     ],
@@ -147,21 +164,74 @@ def _convert_messages(
 # ---------------------------------------------------------------------------
 
 def _extract_text(parts: list[Any]) -> str | None:
-    segments = [p.text for p in parts if getattr(p, "text", None)]
+    segments: list[str] = []
+    for part in parts:
+        try:
+            text = part.text
+        except (AttributeError, ValueError):
+            continue
+        if text:
+            segments.append(text)
     return "".join(segments) if segments else None
 
 
+def _to_plain_python(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _to_plain_python(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_plain_python(item) for item in value]
+    if hasattr(value, "items"):
+        try:
+            return {str(key): _to_plain_python(item) for key, item in value.items()}
+        except Exception:
+            pass
+    if hasattr(value, "model_dump"):
+        try:
+            return _to_plain_python(value.model_dump())
+        except Exception:
+            pass
+    if hasattr(value, "to_dict"):
+        try:
+            return _to_plain_python(value.to_dict())
+        except Exception:
+            pass
+    return value
+
+
+def _args_to_dict(raw_args: Any) -> dict[str, Any]:
+    plain_args = _to_plain_python(raw_args)
+    if isinstance(plain_args, dict):
+        return plain_args
+    return {}
+
+
 def _extract_tool_calls(parts: list[Any]) -> list[ToolCallRequest]:
+    return _extract_tool_calls_with_mapping(parts, {})
+
+
+def _extract_tool_calls_with_mapping(
+    parts: list[Any],
+    provider_to_original: dict[str, str],
+) -> list[ToolCallRequest]:
     calls: list[ToolCallRequest] = []
     for part in parts:
-        fc = getattr(part, "function_call", None)
+        try:
+            fc = getattr(part, "function_call", None)
+        except (AttributeError, ValueError):
+            continue
         if fc is None:
+            continue
+        raw_name = getattr(fc, "name", None)
+        name = provider_to_original.get(raw_name, raw_name)
+        if not name:
             continue
         calls.append(
             ToolCallRequest(
-                id=f"call_{uuid.uuid4().hex[:12]}",
-                name=fc.name,
-                arguments=dict(fc.args) if fc.args else {},
+                id=getattr(fc, "id", None) or f"call_{uuid.uuid4().hex[:12]}",
+                name=name,
+                arguments=_args_to_dict(getattr(fc, "args", None)),
             )
         )
     return calls
@@ -204,6 +274,20 @@ def _classify_client_error(exc: genai_errors.ClientError) -> LLMAdapterError:
     return LLMAdapterError(f"Gemini client error ({code}): {msg}")
 
 
+def _classify_terminal_retry_error(exc: Exception, retries: int) -> LLMAdapterError:
+    if isinstance(exc, genai_errors.ClientError):
+        classified = _classify_client_error(exc)
+        if isinstance(classified, LLMRateLimitError):
+            return LLMRateLimitError(
+                f"{classified} after {retries} retries",
+                retry_after=classified.retry_after,
+            )
+        return classified
+    if isinstance(exc, genai_errors.ServerError):
+        return LLMConnectionError(f"Gemini server error after {retries} retries: {exc}")
+    return LLMAdapterError(f"Gemini request failed after {retries} retries: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Public adapter
 # ---------------------------------------------------------------------------
@@ -232,29 +316,52 @@ class GeminiAdapter(BaseLLMAdapter):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
-        system_instruction, contents = _convert_messages(messages)
-        config = self._build_config(system_instruction, tools, temperature, max_tokens)
+        original_to_provider, provider_to_original = _build_tool_name_mappings(tools)
+        system_instruction, contents = _convert_messages(messages, original_to_provider)
+        config = self._build_config(
+            system_instruction,
+            tools,
+            temperature,
+            max_tokens,
+            original_to_provider,
+        )
 
         response = await self._call_with_retry(contents, config)
 
-        candidate = response.candidates[0] if response.candidates else None
-        if candidate is None:
+        try:
             feedback = getattr(response, "prompt_feedback", None)
-            if feedback:
+            if feedback and getattr(feedback, "block_reason", None):
                 raise LLMContentFilterError(f"Prompt blocked by safety filter: {feedback}")
-            return LLMResponse(model=self._model, finish_reason="error")
 
-        parts = candidate.content.parts if candidate.content else []
-        usage = response.usage_metadata
+            candidates = getattr(response, "candidates", None) or []
+            if not candidates:
+                logger.warning("Gemini returned no candidates: %s", response)
+                return LLMResponse(model=self._model, finish_reason="error")
 
-        return LLMResponse(
-            content=_extract_text(parts),
-            tool_calls=_extract_tool_calls(parts),
-            prompt_tokens=getattr(usage, "prompt_token_count", 0) or 0,
-            completion_tokens=getattr(usage, "candidates_token_count", 0) or 0,
-            model=self._model,
-            finish_reason=_normalise_finish_reason(candidate),
-        )
+            candidate = candidates[0]
+            finish_reason = _normalise_finish_reason(candidate)
+            if finish_reason == "content_filter":
+                raise LLMContentFilterError(
+                    "Response blocked by safety filter: "
+                    f"{getattr(candidate, 'safety_ratings', None)}"
+                )
+
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) or []
+            usage = getattr(response, "usage_metadata", None)
+
+            return LLMResponse(
+                content=_extract_text(parts),
+                tool_calls=_extract_tool_calls_with_mapping(parts, provider_to_original),
+                prompt_tokens=getattr(usage, "prompt_token_count", 0) or 0,
+                completion_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+                model=self._model,
+                finish_reason=finish_reason,
+            )
+        except LLMAdapterError:
+            raise
+        except Exception as exc:
+            raise LLMAdapterError(f"Failed to parse Gemini response: {exc}") from exc
 
     async def stream(
         self,
@@ -264,8 +371,15 @@ class GeminiAdapter(BaseLLMAdapter):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncGenerator[LLMStreamChunk, None]:
-        system_instruction, contents = _convert_messages(messages)
-        config = self._build_config(system_instruction, tools, temperature, max_tokens)
+        original_to_provider, provider_to_original = _build_tool_name_mappings(tools)
+        system_instruction, contents = _convert_messages(messages, original_to_provider)
+        config = self._build_config(
+            system_instruction,
+            tools,
+            temperature,
+            max_tokens,
+            original_to_provider,
+        )
 
         try:
             async for chunk in self._client.aio.models.generate_content_stream(
@@ -280,7 +394,7 @@ class GeminiAdapter(BaseLLMAdapter):
                 usage = chunk.usage_metadata
                 yield LLMStreamChunk(
                     content=_extract_text(parts),
-                    tool_calls=_extract_tool_calls(parts),
+                    tool_calls=_extract_tool_calls_with_mapping(parts, provider_to_original),
                     prompt_tokens=getattr(usage, "prompt_token_count", 0) or 0,
                     completion_tokens=getattr(usage, "candidates_token_count", 0) or 0,
                     finish_reason=_normalise_finish_reason(candidate),
@@ -302,6 +416,7 @@ class GeminiAdapter(BaseLLMAdapter):
         tools: list[dict[str, Any]] | None,
         temperature: float | None,
         max_tokens: int | None,
+        original_to_provider: dict[str, str] | None = None,
     ) -> types.GenerateContentConfig:
         kwargs: dict[str, Any] = {}
         if system_instruction:
@@ -311,9 +426,15 @@ class GeminiAdapter(BaseLLMAdapter):
         if max_tokens is not None:
             kwargs["max_output_tokens"] = max_tokens
         if tools:
+            tool_name_mapping = original_to_provider or {}
             kwargs["tools"] = [
-                types.Tool(function_declarations=_build_function_declarations(tools))
+                types.Tool(
+                    function_declarations=_build_function_declarations(tools, tool_name_mapping)
+                )
             ]
+            kwargs["tool_config"] = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(mode="AUTO")
+            )
         return types.GenerateContentConfig(**kwargs)
 
     async def _call_with_retry(
@@ -333,6 +454,9 @@ class GeminiAdapter(BaseLLMAdapter):
             except genai_errors.ClientError as exc:
                 code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
                 if code == 429:
+                    last_exc = exc
+                    if attempt == _MAX_RETRIES - 1:
+                        raise _classify_terminal_retry_error(exc, _MAX_RETRIES) from exc
                     delay = _BASE_RETRY_DELAY * (2 ** attempt)
                     logger.warning(
                         "Gemini rate-limit hit (attempt %d/%d), retrying in %.1fs",
@@ -340,11 +464,13 @@ class GeminiAdapter(BaseLLMAdapter):
                         _MAX_RETRIES,
                         delay,
                     )
-                    last_exc = exc
                     await asyncio.sleep(delay)
                     continue
                 raise _classify_client_error(exc) from exc
             except genai_errors.ServerError as exc:
+                last_exc = exc
+                if attempt == _MAX_RETRIES - 1:
+                    raise _classify_terminal_retry_error(exc, _MAX_RETRIES) from exc
                 delay = _BASE_RETRY_DELAY * (2 ** attempt)
                 logger.warning(
                     "Gemini server error (attempt %d/%d), retrying in %.1fs: %s",
@@ -353,13 +479,12 @@ class GeminiAdapter(BaseLLMAdapter):
                     delay,
                     exc,
                 )
-                last_exc = exc
                 await asyncio.sleep(delay)
             except LLMAdapterError:
                 raise
             except Exception as exc:
                 raise LLMAdapterError(f"Unexpected error calling Gemini: {exc}") from exc
 
-        raise LLMRateLimitError(
-            f"Gemini rate limit exceeded after {_MAX_RETRIES} retries",
-        ) from last_exc
+        if last_exc is not None:
+            raise _classify_terminal_retry_error(last_exc, _MAX_RETRIES) from last_exc
+        raise LLMAdapterError("Gemini request failed without a provider error.")

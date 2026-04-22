@@ -3,60 +3,72 @@ from __future__ import annotations
 from app.adapters.base import BaseLLMAdapter, LLMAdapterError
 from app.core.config import settings
 
-# Known model prefixes -> adapter class.  New providers are registered here.
-_GEMINI_PREFIXES = ("gemini-",)
-_OPENAI_PREFIXES = ("gpt-", "o1-", "o3-", "o4-")
-_ANTHROPIC_PREFIXES = ("claude-",)
-
-_SUPPORTED_HINT = (
-    "Supported prefixes: gemini-*, gpt-*, o1-*, o3-*, o4-*, claude-*. "
-    "To add a new provider, implement a BaseLLMAdapter subclass and "
-    "register it in adapter_factory.py."
-)
+_SUPPORTED_PROVIDERS = ("openai", "anthropic", "google_genai")
 
 
-def create_adapter(model: str, *, api_key: str | None = None) -> BaseLLMAdapter:
-    """Instantiate the correct :class:`BaseLLMAdapter` for *model*.
+class AdapterFactory:
+    """Instantiate provider-specific :class:`BaseLLMAdapter` implementations."""
 
-    The factory uses a lazy import so that provider-specific SDK
-    dependencies are only loaded when actually needed.
-    """
-    normalised = model.lower().strip()
+    @staticmethod
+    def get_adapter(provider: str, target_model: str) -> BaseLLMAdapter:
+        normalised_provider = provider.strip().lower()
+        normalised_model = target_model.strip()
 
-    # ── Gemini ─────────────────────────────────────────────────────────
-    if normalised.startswith(_GEMINI_PREFIXES):
-        from app.adapters.gemini import GeminiAdapter
+        if not normalised_provider:
+            raise LLMAdapterError("LLM provider is required to create an adapter.")
+        if not normalised_model:
+            raise LLMAdapterError("Target model is required to create an adapter.")
 
-        key = api_key or settings.GOOGLE_API_KEY
-        if not key:
-            raise LLMAdapterError(
-                f"GOOGLE_API_KEY is required to use model '{model}'. "
-                "Set it as an environment variable or pass it explicitly."
+        if normalised_provider == "openai":
+            from app.adapters.openai import OpenAIAdapter
+
+            api_key = AdapterFactory._require_api_key(
+                settings.OPENAI_API_KEY,
+                env_var_name="OPENAI_API_KEY",
+                provider=normalised_provider,
+                target_model=normalised_model,
             )
-        return GeminiAdapter(api_key=key, model=model)
+            return OpenAIAdapter(api_key=api_key, model=normalised_model)
 
-    # ── OpenAI ─────────────────────────────────────────────────────────
-    if normalised.startswith(_OPENAI_PREFIXES):
-        from app.adapters.openai import OpenAIAdapter
+        if normalised_provider == "anthropic":
+            from app.adapters.anthropic import AnthropicAdapter
 
-        key = api_key or settings.OPENAI_API_KEY
-        if not key:
-            raise LLMAdapterError(
-                f"OPENAI_API_KEY is required to use model '{model}'. "
-                "Set it as an environment variable or pass it explicitly."
+            api_key = AdapterFactory._require_api_key(
+                settings.ANTHROPIC_API_KEY,
+                env_var_name="ANTHROPIC_API_KEY",
+                provider=normalised_provider,
+                target_model=normalised_model,
             )
-        return OpenAIAdapter(api_key=key, model=model)
+            return AnthropicAdapter(api_key=api_key, model=normalised_model)
 
-    # ── Anthropic ──────────────────────────────────────────────────────
-    if normalised.startswith(_ANTHROPIC_PREFIXES):
-        from app.adapters.anthropic import AnthropicAdapter
+        if normalised_provider == "google_genai":
+            from app.adapters.gemini import GeminiAdapter
 
-        key = api_key or settings.ANTHROPIC_API_KEY
-        if not key:
-            raise LLMAdapterError(
-                f"ANTHROPIC_API_KEY is required to use model '{model}'. "
-                "Set it as an environment variable or pass it explicitly."
+            api_key = AdapterFactory._require_api_key(
+                settings.GOOGLE_API_KEY,
+                env_var_name="GOOGLE_API_KEY",
+                provider=normalised_provider,
+                target_model=normalised_model,
             )
-        return AnthropicAdapter(api_key=key, model=model)
+            return GeminiAdapter(api_key=api_key, model=normalised_model)
 
-    raise LLMAdapterError(f"Unsupported model: '{model}'. {_SUPPORTED_HINT}")
+        supported = ", ".join(_SUPPORTED_PROVIDERS)
+        raise LLMAdapterError(
+            f"Unsupported provider '{provider}'. Supported providers: {supported}."
+        )
+
+    @staticmethod
+    def _require_api_key(
+        api_key: str | None,
+        *,
+        env_var_name: str,
+        provider: str,
+        target_model: str,
+    ) -> str:
+        normalised_key = api_key.strip() if api_key else ""
+        if not normalised_key:
+            raise LLMAdapterError(
+                f"{env_var_name} is required to use provider '{provider}' with "
+                f"model '{target_model}'."
+            )
+        return normalised_key

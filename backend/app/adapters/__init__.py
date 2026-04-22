@@ -9,7 +9,7 @@ from app.adapters.base import (
     LLMStreamChunk,
     ToolCallRequest,
 )
-from app.adapters.factory import create_adapter
+from app.adapters.factory import AdapterFactory
 
 __all__ = [
     "BaseLLMAdapter",
@@ -21,5 +21,5 @@ __all__ = [
     "LLMResponse",
     "LLMStreamChunk",
     "ToolCallRequest",
-    "create_adapter",
+    "AdapterFactory",
 ]

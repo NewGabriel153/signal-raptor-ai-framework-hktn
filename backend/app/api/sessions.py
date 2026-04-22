@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.adapters import LLMAdapterError, create_adapter
+from app.adapters import AdapterFactory, LLMAdapterError
 from app.core.database import get_db_session
 from app.models import Agent, ExecutionLog, Session
 from app.orchestrator import run_agent_session
@@ -145,12 +145,13 @@ async def run_session_stream(
     db: AsyncSession = Depends(get_db_session),
 ) -> StreamingResponse:
     run_session = await _get_session_or_404(db, session_id)
+    provider = run_session.agent.model_provider
     target_model = run_session.agent.target_model
     registry = get_tool_registry()
 
     async def event_stream() -> AsyncGenerator[str, None]:
         try:
-            adapter = create_adapter(target_model)
+            adapter = AdapterFactory.get_adapter(provider, target_model)
         except LLMAdapterError as exc:
             message = f"Adapter setup failed: {exc}"
             await _persist_stream_setup_failure(
