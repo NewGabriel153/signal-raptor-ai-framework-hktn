@@ -1,10 +1,69 @@
 from __future__ import annotations
 
 import abc
+import hashlib
+import re
 from collections.abc import AsyncGenerator
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+def sanitise_tool_name(
+    name: str,
+    *,
+    invalid_chars_re: re.Pattern[str],
+    max_length: int,
+    require_identifier_start: bool = False,
+) -> str:
+    """Convert a framework tool name into a provider-safe function name."""
+
+    candidate = invalid_chars_re.sub("_", (name or "").strip()) or "tool"
+    if require_identifier_start and not (candidate[0].isalpha() or candidate[0] == "_"):
+        candidate = f"_{candidate}"
+    return candidate[:max_length]
+
+
+def build_tool_name_mappings(
+    tools: list[dict[str, Any]] | None,
+    *,
+    invalid_chars_re: re.Pattern[str],
+    max_length: int,
+    require_identifier_start: bool = False,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Map original framework tool names to provider-safe names and back."""
+
+    original_to_provider: dict[str, str] = {}
+    provider_to_original: dict[str, str] = {}
+    used_provider_names: set[str] = set()
+
+    for tool in tools or []:
+        original_name = str(tool["name"])
+        provider_name = sanitise_tool_name(
+            original_name,
+            invalid_chars_re=invalid_chars_re,
+            max_length=max_length,
+            require_identifier_start=require_identifier_start,
+        )
+
+        if provider_name != original_name:
+            suffix = hashlib.sha1(original_name.encode("utf-8")).hexdigest()[:8]
+            base_length = max_length - len(suffix) - 1
+            provider_name = f"{provider_name[:base_length]}_{suffix}"
+
+        collision_index = 1
+        while provider_name in used_provider_names:
+            suffix_source = f"{original_name}:{collision_index}"
+            suffix = hashlib.sha1(suffix_source.encode("utf-8")).hexdigest()[:8]
+            base_length = max_length - len(suffix) - 1
+            provider_name = f"{provider_name[:base_length]}_{suffix}"
+            collision_index += 1
+
+        used_provider_names.add(provider_name)
+        original_to_provider[original_name] = provider_name
+        provider_to_original[provider_name] = original_name
+
+    return original_to_provider, provider_to_original
 
 
 # ---------------------------------------------------------------------------

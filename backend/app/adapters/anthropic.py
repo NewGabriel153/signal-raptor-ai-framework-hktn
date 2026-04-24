@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -17,23 +18,37 @@ from app.adapters.base import (
     LLMResponse,
     LLMStreamChunk,
     ToolCallRequest,
+    build_tool_name_mappings,
 )
 
 logger = logging.getLogger(__name__)
 
 _MAX_RETRIES: int = 3
 _BASE_RETRY_DELAY: float = 1.0
+_MAX_TOOL_NAME_LENGTH: int = 128
+_INVALID_TOOL_NAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_-]")
+_ANTHROPIC_MODEL_ALIASES: dict[str, str] = {
+    "claude-3-5-sonnet-latest": "claude-sonnet-4-6",
+    "claude-3-5-haiku-latest": "claude-haiku-4-5",
+}
+_SUPPORTED_MODEL_HINT = (
+    "Use a supported Anthropic model ID such as 'claude-sonnet-4-6' or "
+    "'claude-haiku-4-5'."
+)
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _build_anthropic_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_anthropic_tools(
+    tools: list[dict[str, Any]],
+    original_to_provider: dict[str, str],
+) -> list[dict[str, Any]]:
     """Wrap framework tool dicts into the Anthropic tool format."""
     return [
         {
-            "name": t["name"],
+            "name": original_to_provider.get(t["name"], t["name"]),
             "description": t.get("description", ""),
             "input_schema": t.get("parameters", {"type": "object", "properties": {}}),
         }
@@ -43,6 +58,7 @@ def _build_anthropic_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _convert_messages(
     messages: list[dict[str, Any]],
+    original_to_provider: dict[str, str],
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Split out the system prompt and convert framework messages to
     the Anthropic format."""
@@ -65,7 +81,7 @@ def _convert_messages(
                 content_blocks.append({
                     "type": "tool_use",
                     "id": tc.get("id", ""),
-                    "name": tc["name"],
+                    "name": original_to_provider.get(tc["name"], tc["name"]),
                     "input": tc.get("arguments", {}),
                 })
             out.append({"role": "assistant", "content": content_blocks or text or ""})
@@ -88,14 +104,19 @@ def _convert_messages(
     return system, out
 
 
-def _extract_tool_calls(content_blocks: list[Any]) -> list[ToolCallRequest]:
+def _extract_tool_calls(
+    content_blocks: list[Any],
+    provider_to_original: dict[str, str] | None = None,
+) -> list[ToolCallRequest]:
     calls: list[ToolCallRequest] = []
+    tool_name_mapping = provider_to_original or {}
     for block in content_blocks:
         if getattr(block, "type", None) == "tool_use":
+            raw_name = getattr(block, "name", None)
             calls.append(
                 ToolCallRequest(
                     id=block.id,
-                    name=block.name,
+                    name=tool_name_mapping.get(raw_name, raw_name),
                     arguments=block.input if isinstance(block.input, dict) else {},
                 )
             )
@@ -123,11 +144,21 @@ def _normalise_stop_reason(raw: str | None) -> str:
     return raw
 
 
+def _normalise_model_name(model: str) -> str:
+    normalised = model.strip().lower()
+    return _ANTHROPIC_MODEL_ALIASES.get(normalised, normalised)
+
+
 def _classify_error(exc: anthropic.APIError) -> LLMAdapterError:
     status = getattr(exc, "status_code", None)
     msg = str(exc)
     if isinstance(exc, anthropic.AuthenticationError):
         return LLMAuthenticationError(f"Anthropic authentication failed: {msg}")
+    if isinstance(exc, anthropic.NotFoundError):
+        return LLMAdapterError(
+            "Anthropic model not found or unsupported. "
+            f"{_SUPPORTED_MODEL_HINT} Provider response: {msg}"
+        )
     if isinstance(exc, anthropic.RateLimitError):
         return LLMRateLimitError(f"Anthropic rate limit exceeded: {msg}")
     if isinstance(exc, anthropic.InternalServerError):
@@ -149,7 +180,10 @@ class AnthropicAdapter(BaseLLMAdapter):
     def __init__(self, *, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
         if not api_key:
             raise LLMAuthenticationError("ANTHROPIC_API_KEY is required for AnthropicAdapter.")
-        self._model = model
+        normalised_model = _normalise_model_name(model)
+        if normalised_model != model:
+            logger.info("Remapped Anthropic model '%s' -> '%s'", model, normalised_model)
+        self._model = normalised_model
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
 
     async def generate(
@@ -160,7 +194,12 @@ class AnthropicAdapter(BaseLLMAdapter):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
-        system, converted = _convert_messages(messages)
+        original_to_provider, provider_to_original = build_tool_name_mappings(
+            tools,
+            invalid_chars_re=_INVALID_TOOL_NAME_CHARS_RE,
+            max_length=_MAX_TOOL_NAME_LENGTH,
+        )
+        system, converted = _convert_messages(messages, original_to_provider)
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -170,7 +209,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         if system:
             kwargs["system"] = system
         if tools:
-            kwargs["tools"] = _build_anthropic_tools(tools)
+            kwargs["tools"] = _build_anthropic_tools(tools, original_to_provider)
         if temperature is not None:
             kwargs["temperature"] = temperature
 
@@ -178,7 +217,7 @@ class AnthropicAdapter(BaseLLMAdapter):
 
         return LLMResponse(
             content=_extract_text(response.content),
-            tool_calls=_extract_tool_calls(response.content),
+            tool_calls=_extract_tool_calls(response.content, provider_to_original),
             prompt_tokens=response.usage.input_tokens if response.usage else 0,
             completion_tokens=response.usage.output_tokens if response.usage else 0,
             model=self._model,
@@ -193,7 +232,12 @@ class AnthropicAdapter(BaseLLMAdapter):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncGenerator[LLMStreamChunk, None]:
-        system, converted = _convert_messages(messages)
+        original_to_provider, provider_to_original = build_tool_name_mappings(
+            tools,
+            invalid_chars_re=_INVALID_TOOL_NAME_CHARS_RE,
+            max_length=_MAX_TOOL_NAME_LENGTH,
+        )
+        system, converted = _convert_messages(messages, original_to_provider)
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -203,7 +247,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         if system:
             kwargs["system"] = system
         if tools:
-            kwargs["tools"] = _build_anthropic_tools(tools)
+            kwargs["tools"] = _build_anthropic_tools(tools, original_to_provider)
         if temperature is not None:
             kwargs["temperature"] = temperature
 
@@ -225,7 +269,7 @@ class AnthropicAdapter(BaseLLMAdapter):
                         if getattr(block, "type", None) == "tool_use":
                             current_tool = {
                                 "id": block.id,
-                                "name": block.name,
+                                "name": provider_to_original.get(block.name, block.name),
                                 "arguments_json": "",
                             }
 

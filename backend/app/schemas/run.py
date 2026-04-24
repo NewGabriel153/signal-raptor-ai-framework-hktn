@@ -40,7 +40,7 @@ class ExecutionLogRead(BaseModel):
     step_sequence: int
     role: str
     content: Optional[str]
-    tool_calls: Optional[dict[str, Any]]
+    tool_calls: Optional[Any]
     prompt_tokens: Optional[int]
     completion_tokens: Optional[int]
     created_at: datetime

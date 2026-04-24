@@ -49,7 +49,7 @@ class ExecutionLog(Base):
     step_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    tool_calls: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    tool_calls: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
     prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

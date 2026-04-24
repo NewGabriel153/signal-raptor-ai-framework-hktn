@@ -43,9 +43,16 @@
               <label class="mb-1.5 block text-xs font-medium uppercase tracking-widest text-slate-400">Model Provider</label>
               <select
                 v-model="form.model_provider"
+                @change="onProviderChange"
                 class="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
               >
-                <option value="google_genai">google_genai</option>
+                <option
+                  v-for="provider in providerOptions"
+                  :key="provider"
+                  :value="provider"
+                >
+                  {{ provider }}
+                </option>
               </select>
             </div>
             <div>
@@ -54,8 +61,13 @@
                 v-model="form.target_model"
                 class="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
               >
-                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                <option
+                  v-for="model in providerModels[selectedProvider]"
+                  :key="model"
+                  :value="model"
+                >
+                  {{ model }}
+                </option>
               </select>
             </div>
           </div>
@@ -127,7 +139,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
+import { getDefaultTargetModel, providerModels, providerOptions } from '../constants/agentModels';
+import type { Provider } from '../constants/agentModels';
 import { useManagementStore } from '../stores/managementStore';
 import { useSessionStore } from '../stores/sessionStore';
 
@@ -138,13 +152,18 @@ const sessionStore = useSessionStore();
 const form = reactive({
   name: '',
   description: '',
-  model_provider: 'google_genai',
-  target_model: 'gemini-1.5-flash',
+  model_provider: 'google_genai' as Provider,
+  target_model: getDefaultTargetModel('google_genai'),
 });
 
 const selectedToolIds = ref<string[]>([]);
 const isSubmitting = ref(false);
 const toast = ref<{ type: 'success' | 'error'; message: string } | null>(null);
+const selectedProvider = computed(() => form.model_provider);
+
+function onProviderChange() {
+  form.target_model = getDefaultTargetModel(selectedProvider.value);
+}
 
 onMounted(() => {
   mgmt.fetchTools();

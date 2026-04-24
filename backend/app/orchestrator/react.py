@@ -115,6 +115,11 @@ def _build_tool_schemas(agent: Agent) -> list[dict[str, Any]]:
     ]
 
 
+def _build_tool_name_to_function(agent: Agent) -> dict[str, str]:
+    """Map DB tool names to their Python registry function names."""
+    return {tool.name: tool.python_function_name for tool in agent.tools}
+
+
 def _iter_text_chunks(text: str, chunk_size: int = 48) -> Iterator[str]:
     for start in range(0, len(text), chunk_size):
         yield text[start : start + chunk_size]
@@ -197,6 +202,7 @@ async def run_agent_session(
 
         conversation_history = _build_conversation_history(run_session)
         tool_schemas = _build_tool_schemas(run_session.agent)
+        tool_name_to_function = _build_tool_name_to_function(run_session.agent)
         next_step_sequence = await _get_next_step_sequence(db, session_id)
 
         run_session.status = "running"
@@ -246,7 +252,8 @@ async def run_agent_session(
                 for tool_call in llm_response.tool_calls:
                     yield _build_event("tool_call", tool_call.model_dump())
 
-                    tool_result = await registry.execute(tool_call.name, tool_call.arguments)
+                    registry_name = tool_name_to_function.get(tool_call.name, tool_call.name)
+                    tool_result = await registry.execute(registry_name, tool_call.arguments)
                     tool_content = json.dumps(tool_result)
                     next_step_sequence = await _persist_execution_log(
                         db,

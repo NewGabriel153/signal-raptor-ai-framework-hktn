@@ -2,6 +2,7 @@ import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { defineStore } from 'pinia';
 
 const API_BASE_URL = 'http://localhost:8000/api/v1';
+const SESSION_LOAD_TIMEOUT_MS = 15000;
 
 export interface Agent {
   id: string;
@@ -35,12 +36,23 @@ export interface SessionSummary {
   end_time: string | null;
 }
 
+interface PersistedToolCall {
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+}
+
+interface PersistedToolResultMeta {
+  name?: string;
+  tool_call_id?: string;
+}
+
 interface ExecutionLogEntry {
   id: string;
   step_sequence: number;
   role: string;
   content: string | null;
-  tool_calls: Record<string, unknown> | null;
+  tool_calls: Record<string, unknown> | PersistedToolCall[] | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
   created_at: string;
@@ -89,6 +101,32 @@ function getErrorMessage(error: unknown): string {
   }
 
   return 'An unexpected error occurred.';
+}
+
+function parsePersistedToolResult(content: string | null): unknown {
+  if (content == null) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    return content;
+  }
+}
+
+async function readResponseErrorMessage(response: Response): Promise<string | null> {
+  const contentType = response.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+    if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+      return payload.detail;
+    }
+  }
+
+  const body = await response.text().catch(() => '');
+  return body.trim() || null;
 }
 
 export const useSessionStore = defineStore('session', {
@@ -145,57 +183,105 @@ export const useSessionStore = defineStore('session', {
 
     async loadSession(sessionId: string) {
       this.isLoadingSession = true;
+      this.chatMessages = [];
+      this.executionTraces = [];
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), SESSION_LOAD_TIMEOUT_MS);
+
       try {
-        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/logs`);
+        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/logs`, {
+          signal: controller.signal,
+        });
         if (!response.ok) {
-          throw new Error(`Failed to load session logs (${response.status}).`);
+          const detail = await readResponseErrorMessage(response);
+          throw new Error(detail ?? `Failed to load session logs (${response.status}).`);
         }
 
         const payload = (await response.json()) as SessionLogsResponse;
 
-        const chatMessages: ChatMessage[] = [];
-        const executionTraces: ExecutionTrace[] = [];
-
         for (const log of payload.execution_logs) {
-          if (log.role === 'user' || log.role === 'assistant') {
-            chatMessages.push({
+          if (log.role === 'user') {
+            this.chatMessages.push({
               id: log.id,
-              role: log.role as 'user' | 'assistant',
+              role: 'user',
               content: log.content ?? '',
             });
-          } else if (log.role === 'tool' && log.tool_calls) {
-            executionTraces.push({
-              id: log.id,
-              type: 'tool_call',
-              label: (log.tool_calls as Record<string, unknown>).name as string ?? 'tool.call',
-              payload: log.tool_calls,
-              createdAt: log.created_at,
-            });
-          } else if (log.role === 'tool') {
-            executionTraces.push({
+            continue;
+          }
+
+          if (log.role === 'assistant') {
+            if (log.content != null) {
+              this.chatMessages.push({
+                id: log.id,
+                role: 'assistant',
+                content: log.content,
+              });
+            }
+
+            const toolCalls = Array.isArray(log.tool_calls) ? log.tool_calls : [];
+            for (const toolCall of toolCalls) {
+              this.executionTraces.push({
+                id: toolCall.id ?? createId(),
+                type: 'tool_call',
+                label: toolCall.name ?? 'tool.call',
+                payload: toolCall,
+                createdAt: log.created_at,
+              });
+            }
+
+            continue;
+          }
+
+          if (log.role === 'tool') {
+            const metadata = (!Array.isArray(log.tool_calls) ? log.tool_calls : null) as PersistedToolResultMeta | null;
+            this.executionTraces.push({
               id: log.id,
               type: 'tool_result',
-              label: 'tool.result',
-              payload: log.content,
+              label: metadata?.name ?? 'tool.result',
+              payload: {
+                id: metadata?.tool_call_id,
+                name: metadata?.name,
+                result: parsePersistedToolResult(log.content),
+              },
               createdAt: log.created_at,
             });
-          } else {
-            executionTraces.push({
-              id: log.id,
-              type: 'status',
-              label: log.role,
-              payload: log.content ?? log.tool_calls,
-              createdAt: log.created_at,
-            });
+
+            continue;
           }
+
+          this.executionTraces.push({
+            id: log.id,
+            type: 'status',
+            label: log.role,
+            payload: log.content ?? log.tool_calls,
+            createdAt: log.created_at,
+          });
         }
 
+        this.executionTraces.push({
+          id: createId(),
+          type: 'status',
+          label: 'history.loaded',
+          payload: {
+            message: 'History loaded',
+            sessionId: payload.id,
+          },
+          createdAt: new Date().toISOString(),
+        });
+
         this.activeSessionId = payload.id;
-        this.chatMessages = chatMessages;
-        this.executionTraces = executionTraces;
+        return payload;
       } catch (error) {
-        this.pushTrace('error', 'session.load_failed', { message: getErrorMessage(error) });
+        const isTimeout = error instanceof DOMException && error.name === 'AbortError';
+        this.pushTrace('error', 'session.load_failed', {
+          sessionId,
+          kind: isTimeout ? 'timeout' : 'request',
+          message: isTimeout
+            ? `Session history request timed out after ${SESSION_LOAD_TIMEOUT_MS / 1000}s.`
+            : getErrorMessage(error),
+        });
       } finally {
+        window.clearTimeout(timeoutId);
         this.isLoadingSession = false;
       }
     },

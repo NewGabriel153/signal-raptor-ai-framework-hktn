@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -22,6 +21,7 @@ from app.adapters.base import (
     LLMResponse,
     LLMStreamChunk,
     ToolCallRequest,
+    build_tool_name_mappings,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,42 +40,15 @@ _INVALID_FUNCTION_NAME_CHARS_RE = re.compile(r"[^A-Za-z0-9_.:-]")
 # Internal helpers – message / tool conversion
 # ---------------------------------------------------------------------------
 
-
-def _sanitise_function_name(name: str) -> str:
-    candidate = _INVALID_FUNCTION_NAME_CHARS_RE.sub("_", (name or "").strip()) or "tool"
-    if not (candidate[0].isalpha() or candidate[0] == "_"):
-        candidate = f"_{candidate}"
-    return candidate[:_MAX_FUNCTION_NAME_LENGTH]
-
-
 def _build_tool_name_mappings(
     tools: list[dict[str, Any]] | None,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    original_to_provider: dict[str, str] = {}
-    provider_to_original: dict[str, str] = {}
-    used_provider_names: set[str] = set()
-
-    for tool in tools or []:
-        original_name = str(tool["name"])
-        provider_name = _sanitise_function_name(original_name)
-
-        if provider_name != original_name:
-            suffix = hashlib.sha1(original_name.encode("utf-8")).hexdigest()[:8]
-            base_length = _MAX_FUNCTION_NAME_LENGTH - len(suffix) - 1
-            provider_name = f"{provider_name[:base_length]}_{suffix}"
-
-        collision_index = 1
-        while provider_name in used_provider_names:
-            suffix = hashlib.sha1(f"{original_name}:{collision_index}".encode("utf-8")).hexdigest()[:8]
-            base_length = _MAX_FUNCTION_NAME_LENGTH - len(suffix) - 1
-            provider_name = f"{provider_name[:base_length]}_{suffix}"
-            collision_index += 1
-
-        used_provider_names.add(provider_name)
-        original_to_provider[original_name] = provider_name
-        provider_to_original[provider_name] = original_name
-
-    return original_to_provider, provider_to_original
+    return build_tool_name_mappings(
+        tools,
+        invalid_chars_re=_INVALID_FUNCTION_NAME_CHARS_RE,
+        max_length=_MAX_FUNCTION_NAME_LENGTH,
+        require_identifier_start=True,
+    )
 
 
 def _build_function_declarations(

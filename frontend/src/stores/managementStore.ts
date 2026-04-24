@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import type { Provider, ProviderModel } from '../constants/agentModels';
 
 const API_BASE_URL = 'http://localhost:8000/api/v1';
 
@@ -26,8 +27,8 @@ interface ToolCreatePayload {
 interface AgentCreatePayload {
   name: string;
   description: string;
-  model_provider: string;
-  target_model: string;
+  model_provider: Provider;
+  target_model: ProviderModel;
   tool_ids: string[];
 }
 

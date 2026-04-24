@@ -1,6 +1,6 @@
 <template>
-  <main class="dark min-h-screen overflow-hidden bg-slate-950 text-slate-100">
-    <div class="relative isolate flex min-h-screen">
+  <main class="dark h-screen overflow-hidden bg-slate-950 text-slate-100">
+    <div class="relative isolate flex h-full">
       <div class="pointer-events-none absolute inset-0 overflow-hidden">
         <div class="absolute left-[-8rem] top-[-6rem] h-72 w-72 rounded-full bg-cyan-400/18 blur-3xl" />
         <div class="absolute bottom-[-10rem] right-[-3rem] h-96 w-96 rounded-full bg-amber-400/14 blur-3xl" />
@@ -8,12 +8,7 @@
       </div>
 
       <!-- Session History Sidebar -->
-      <nav class="relative z-10 flex w-64 shrink-0 flex-col border-r border-white/10 bg-slate-900/80 backdrop-blur-xl">
-        <div class="border-b border-white/10 px-4 py-5">
-          <p class="text-[0.65rem] font-medium uppercase tracking-[0.4em] text-cyan-300/70">Observability</p>
-          <h2 class="mt-1.5 text-sm font-semibold text-white">Session History</h2>
-        </div>
-
+      <nav class="relative z-10 flex h-full w-64 shrink-0 flex-col border-r border-white/10 bg-slate-900/80 backdrop-blur-xl">
         <div class="border-b border-white/10 px-3 py-3 space-y-2">
           <button
             class="w-full rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100 transition hover:border-cyan-200/60 hover:bg-cyan-300/20"
@@ -33,6 +28,11 @@
           >
             + Register Tool
           </button>
+        </div>
+        
+        <div class="border-b border-white/10 px-4 py-5">
+          <p class="text-[0.65rem] font-medium uppercase tracking-[0.4em] text-cyan-300/70">Observability</p>
+          <h2 class="mt-1.5 text-sm font-semibold text-white">Session History</h2>
         </div>
 
         <div class="flex-1 overflow-y-auto px-2 py-2">
@@ -66,7 +66,7 @@
       </nav>
 
       <!-- Main Content -->
-      <div class="relative flex min-h-screen flex-1 flex-col">
+      <div class="relative flex h-full flex-1 flex-col overflow-hidden">
         <div v-if="isLoadingSession" class="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm">
           <div class="flex flex-col items-center gap-3">
             <div class="h-8 w-8 animate-spin rounded-full border-2 border-cyan-300/30 border-t-cyan-300" />
@@ -74,7 +74,7 @@
           </div>
         </div>
 
-      <section class="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+      <section class="relative mx-auto flex h-full w-full max-w-7xl flex-col overflow-hidden px-4 py-6 sm:px-6 lg:px-8">
         <header class="mb-6 flex flex-col gap-4 rounded-[2rem] border border-white/10 bg-white/5 px-5 py-5 shadow-panel backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p class="text-xs font-medium uppercase tracking-[0.45em] text-cyan-300/80">Signal Raptor</p>
@@ -123,8 +123,8 @@
           </span>
         </div>
 
-        <div class="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.9fr)]">
-          <section class="flex min-h-[32rem] flex-col rounded-[2rem] border border-white/10 bg-slate-900/75 shadow-panel backdrop-blur-xl">
+        <div class="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.9fr)]">
+          <section class="flex min-h-0 flex-col overflow-hidden rounded-[2rem] border border-white/10 bg-slate-900/75 shadow-panel backdrop-blur-xl">
             <div class="border-b border-white/10 px-5 py-4">
               <h2 class="text-lg font-semibold text-white">Operator Console</h2>
               <p class="mt-1 text-sm text-slate-400">Send prompts and watch the assistant stream its final response.</p>
@@ -185,7 +185,7 @@
             </form>
           </section>
 
-          <aside class="flex min-h-[32rem] flex-col overflow-hidden rounded-[2rem] border border-cyan-200/10 bg-[#020816]/90 shadow-panel backdrop-blur-xl">
+          <aside class="flex min-h-0 flex-col overflow-hidden rounded-[2rem] border border-cyan-200/10 bg-[#020816]/90 shadow-panel backdrop-blur-xl">
             <div class="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div>
                 <h2 class="text-lg font-semibold text-white">Execution Trace</h2>
@@ -325,7 +325,10 @@ function handleNewSession() {
 
 async function handleLoadSession(sessionId: string) {
   formError.value = '';
-  await sessionStore.loadSession(sessionId);
+  const payload = await sessionStore.loadSession(sessionId);
+  if (payload) {
+    selectedAgentId.value = payload.agent_id;
+  }
 }
 
 async function handleCreateSession() {
