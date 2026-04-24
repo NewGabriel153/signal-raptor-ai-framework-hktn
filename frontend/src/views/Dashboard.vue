@@ -29,7 +29,7 @@
             + Register Tool
           </button>
         </div>
-        
+
         <div class="border-b border-white/10 px-4 py-5">
           <p class="text-[0.65rem] font-medium uppercase tracking-[0.4em] text-cyan-300/70">Observability</p>
           <h2 class="mt-1.5 text-sm font-semibold text-white">Session History</h2>
@@ -113,10 +113,14 @@
             Session {{ sessionLabel }}
           </span>
           <span
-            class="rounded-full border px-3 py-1.5"
+            class="rounded-full border px-3 py-1.5 inline-flex items-center gap-1.5"
             :class="isStreaming ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-white/10 bg-white/5 text-slate-300'"
           >
-            {{ isStreaming ? 'Streaming' : 'Idle' }}
+            <template v-if="isStreaming">
+              Streaming
+              <span class="streaming-dots"><span></span><span></span><span></span></span>
+            </template>
+            <template v-else>Idle</template>
           </span>
           <span class="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
             {{ executionTraces.length }} trace events
@@ -153,7 +157,17 @@
                   <p class="mb-2 text-[0.68rem] uppercase tracking-[0.28em] text-slate-400">
                     {{ message.role === 'user' ? 'Operator' : 'Assistant' }}
                   </p>
-                  <p class="whitespace-pre-wrap text-sm leading-7">{{ message.content || (isStreaming ? 'Streaming response…' : '') }}</p>
+                  <!-- User messages: plain text. Assistant messages: sanitized markdown -->
+                  <p v-if="message.role === 'user'" class="whitespace-pre-wrap text-sm leading-7">{{ message.content }}</p>
+                  <div
+                    v-else-if="message.content"
+                    class="prose-chat"
+                    v-html="renderMarkdown(message.content)"
+                  />
+                  <p v-else-if="isStreaming" class="text-sm leading-7 text-slate-400 inline-flex items-center gap-1">
+                    Streaming response
+                    <span class="streaming-dots"><span></span><span></span><span></span></span>
+                  </p>
                 </div>
               </article>
               <div ref="chatBottomRef" />
@@ -167,18 +181,24 @@
                   class="w-full resize-none bg-transparent px-3 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500"
                   placeholder="Ask the agent to inspect a ticket, generate a plan, or invoke a tool..."
                   :disabled="isStreaming"
+                  @keydown="handleTextareaKeydown"
                 />
                 <div class="flex flex-col gap-3 border-t border-white/10 px-3 pb-2 pt-3 sm:flex-row sm:items-center sm:justify-between">
                   <p v-if="formError" class="text-sm text-rose-300">{{ formError }}</p>
                   <p v-else class="text-xs uppercase tracking-[0.28em] text-slate-500">
                     {{ selectedAgentName }}
+                    <span class="ml-1 text-slate-600 normal-case tracking-normal">· Enter to send</span>
                   </p>
                   <button
                     type="submit"
                     class="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
                     :disabled="!promptDraft.trim() || isStreaming"
                   >
-                    {{ isStreaming ? 'Streaming…' : 'Send Prompt' }}
+                    <template v-if="isStreaming">
+                      Streaming
+                      <span class="streaming-dots ml-0.5 text-slate-400"><span></span><span></span><span></span></span>
+                    </template>
+                    <template v-else>Send Prompt</template>
                   </button>
                 </div>
               </div>
@@ -235,10 +255,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 import AgentModal from '../components/AgentModal.vue';
 import ToolModal from '../components/ToolModal.vue';
 import { useSessionStore, type ExecutionTrace, type SessionSummary } from '../stores/sessionStore';
+
+// Enable GitHub-flavoured markdown and auto line-break conversion
+marked.setOptions({ breaks: true, gfm: true });
+
+function renderMarkdown(content: string): string {
+  const raw = marked.parse(content, { async: false }) as string;
+  return DOMPurify.sanitize(raw);
+}
 
 const sessionStore = useSessionStore();
 const { activeSessionId, agents, chatMessages, executionTraces, isStreaming, sessionHistory, isLoadingHistory, isLoadingSession } = storeToRefs(sessionStore);
@@ -314,6 +344,14 @@ function traceToneClass(type: ExecutionTrace['type']): string {
       return 'border-rose-300/20 bg-rose-400/8 text-rose-100';
     default:
       return 'border-white/10 bg-white/5 text-slate-200';
+  }
+}
+
+function handleTextareaKeydown(event: KeyboardEvent) {
+  // Enter alone submits; Shift+Enter inserts a newline as expected
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    handleSubmitPrompt();
   }
 }
 
