@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -98,12 +99,21 @@ def _convert_messages(
                 parts.append(types.Part.from_text(text=text))
             for tc in msg.get("tool_calls", []):
                 tool_name = original_to_provider.get(tc["name"], tc["name"])
-                parts.append(
-                    types.Part.from_function_call(
-                        name=tool_name,
-                        args=tc.get("arguments", {}),
-                    )
+                fc_part = types.Part.from_function_call(
+                    name=tool_name,
+                    args=tc.get("arguments", {}),
                 )
+                # Gemini 3 requires thought_signature on function call parts.
+                # The value was base64-encoded during extraction; decode back
+                # to bytes for the SDK.
+                sig = tc.get("thought_signature")
+                if sig:
+                    try:
+                        sig_bytes = base64.b64decode(sig) if isinstance(sig, str) else sig
+                        fc_part.thought_signature = sig_bytes
+                    except Exception:
+                        logger.debug("Could not set thought_signature on Part")
+                parts.append(fc_part)
             if parts:
                 contents.append(types.Content(role="model", parts=parts))
 
@@ -200,11 +210,22 @@ def _extract_tool_calls_with_mapping(
         name = provider_to_original.get(raw_name, raw_name)
         if not name:
             continue
+        # Gemini 3 models return thought_signature on function call parts
+        # as raw bytes.  We base64-encode for safe JSON round-tripping and
+        # decode back to bytes in _convert_messages.
+        raw_sig = getattr(part, "thought_signature", None)
+        if isinstance(raw_sig, bytes):
+            thought_sig = base64.b64encode(raw_sig).decode("ascii")
+        elif isinstance(raw_sig, str):
+            thought_sig = raw_sig
+        else:
+            thought_sig = None
         calls.append(
             ToolCallRequest(
                 id=getattr(fc, "id", None) or f"call_{uuid.uuid4().hex[:12]}",
                 name=name,
                 arguments=_args_to_dict(getattr(fc, "args", None)),
+                thought_signature=thought_sig,
             )
         )
     return calls
