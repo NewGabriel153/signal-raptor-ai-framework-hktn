@@ -1,5 +1,5 @@
 export const providerModels = {
-  google_genai: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+  google_genai: ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash', 'gemini-2.5-pro'],
   openai: ['gpt-4o', 'gpt-4o-mini'],
   anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
 } as const;
