@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import api_router
 from app.core.config import settings
 from app.core.database import engine
+from app.core.pubsub import close_pubsub_redis
 from app.models import Base
 
 
@@ -16,6 +17,7 @@ async def lifespan(_: FastAPI):
 
     yield
 
+    await close_pubsub_redis()
     await engine.dispose()
 
 

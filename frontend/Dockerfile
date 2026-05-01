@@ -1,19 +1,23 @@
-FROM node:16
+FROM node:lts-alpine AS build
 
-# Set the working directory
 WORKDIR /app
 
-# Copy package metadata, including a lockfile when present
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+RUN npm ci
 
-# Copy the rest of the application code
 COPY . .
 
-# Expose the port the app runs on
-EXPOSE 5173
+RUN npm run build
 
-# Command to run the application
-CMD ["npm", "run", "dev"]
+FROM caddy:alpine
+
+WORKDIR /app
+
+COPY Caddyfile ./
+
+RUN caddy fmt Caddyfile --overwrite
+
+COPY --from=build /app/dist ./dist
+
+CMD ["caddy", "run", "--config", "Caddyfile", "--adapter", "caddyfile"]
