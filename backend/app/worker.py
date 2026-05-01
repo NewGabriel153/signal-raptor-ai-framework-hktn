@@ -11,8 +11,11 @@ from sqlalchemy.orm import selectinload
 from app.adapters import AdapterFactory, LLMAdapterError
 from app.core.config import settings
 from app.core.database import AsyncSessionFactory
+from app.core.pubsub import publish_session_event
 from app.core.queue import get_redis_settings
 from app.models import Agent, ExecutionLog, Session
+from app.orchestrator import run_agent_session
+from app.tools import get_tool_registry
 
 
 async def _get_run_session(session: AsyncSession, session_id: UUID) -> Session | None:
@@ -34,74 +37,25 @@ async def _get_next_step_sequence(session: AsyncSession, session_id: UUID) -> in
     return int(result.scalar_one()) + 1
 
 
-def _append_log(
-    db_session: AsyncSession,
-    session_id: UUID,
-    step_sequence: int,
-    role: str,
-    content: str,
-    tool_calls: dict[str, Any] | None = None,
-) -> int:
-    db_session.add(
-        ExecutionLog(
-            session_id=session_id,
-            step_sequence=step_sequence,
-            role=role,
-            content=content,
-            tool_calls=tool_calls,
-        )
-    )
-    return step_sequence + 1
-
-
-def _build_messages(agent: Agent, prompt: str) -> list[dict[str, Any]]:
-    """Assemble the standardized message list sent to the LLM adapter."""
-    messages: list[dict[str, Any]] = []
-    active_prompt = next((pv for pv in agent.prompt_versions if pv.is_active), None)
-    if active_prompt:
-        messages.append({"role": "system", "content": active_prompt.system_prompt_template})
-    messages.append({"role": "user", "content": prompt})
-    return messages
-
-
-def _build_tool_schemas(agent: Agent) -> list[dict[str, Any]]:
-    """Convert the agent's registered tools into adapter-ready dicts."""
-    return [
-        {
-            "name": tool.name,
-            "description": tool.description or "",
-            "parameters": tool.json_schema,
-        }
-        for tool in agent.tools
-    ]
-
-
-def _build_scaffold_response(agent: Agent, prompt: str) -> str:
-    """Fallback placeholder when no LLM adapter is available."""
-    return (
-        f"[scaffold] Queued run completed for agent '{agent.name}'. "
-        f"Prompt received: {prompt}. "
-        "Set GOOGLE_API_KEY to enable real LLM responses."
-    )
-
-
-async def _mark_run_failed(session_id: UUID, reason: str) -> None:
+async def _mark_run_failed(session_id: UUID, reason: str) -> ExecutionLog | None:
     async with AsyncSessionFactory() as db_session:
         run_session = await db_session.get(Session, session_id)
         if run_session is None:
-            return
+            return None
 
         next_step = await _get_next_step_sequence(db_session, session_id)
         run_session.status = "failed"
         run_session.end_time = datetime.now(timezone.utc)
-        _append_log(
-            db_session,
-            session_id,
-            next_step,
-            "system",
-            f"Run failed in background worker: {reason}",
+        log_entry = ExecutionLog(
+            session_id=session_id,
+            step_sequence=next_step,
+            role="system",
+            content=f"Run failed in background worker: {reason}",
         )
+        db_session.add(log_entry)
         await db_session.commit()
+        await db_session.refresh(log_entry)
+        return log_entry
 
 
 async def process_agent_run(_: dict[str, Any], session_id: str, prompt: str) -> dict[str, str]:
@@ -113,74 +67,79 @@ async def process_agent_run(_: dict[str, Any], session_id: str, prompt: str) -> 
             if run_session is None:
                 return {"session_id": session_id, "status": "missing"}
 
-            if run_session.status == "completed":
-                return {"session_id": session_id, "status": run_session.status}
-
-            next_step = await _get_next_step_sequence(db_session, run_id)
-            run_session.status = "running"
-            next_step = _append_log(
-                db_session,
-                run_id,
-                next_step,
-                "system",
-                f"Worker picked up run for agent '{run_session.agent.name}'.",
-            )
-
-            agent = run_session.agent
-
-            # --- attempt real LLM call via adapter -------------------------
             try:
-                adapter = AdapterFactory.get_adapter(agent.model_provider, agent.target_model)
+                adapter = AdapterFactory.get_adapter(
+                    run_session.agent.model_provider,
+                    run_session.agent.target_model,
+                )
             except LLMAdapterError as exc:
-                next_step = _append_log(
-                    db_session, run_id, next_step, "system",
-                    f"LLM adapter unavailable ({exc}), returning scaffold response.",
+                message = f"Adapter setup failed: {exc}"
+                error_log = await _mark_run_failed(run_id, message)
+                error_event: dict[str, Any] = {
+                    "event": "error",
+                    "data": {"message": message},
+                }
+                if error_log is not None:
+                    error_event["step_sequence"] = error_log.step_sequence
+                    error_event["data"].update(
+                        {
+                            "log_id": str(error_log.id),
+                            "created_at": error_log.created_at.isoformat(),
+                        }
+                    )
+                await publish_session_event(run_id, error_event)
+                await publish_session_event(
+                    run_id,
+                    {
+                        "event": "done",
+                        "data": {"session_id": session_id, "status": "failed"},
+                        "step_sequence": error_log.step_sequence if error_log is not None else None,
+                    },
                 )
-                _append_log(
-                    db_session, run_id, next_step, "assistant",
-                    _build_scaffold_response(agent, prompt),
-                )
-                run_session.status = "completed"
-                run_session.end_time = datetime.now(timezone.utc)
-                await db_session.commit()
-                return {"session_id": session_id, "status": "completed"}
+                return {"session_id": session_id, "status": "failed"}
 
-            messages = _build_messages(agent, prompt)
-            tool_schemas = _build_tool_schemas(agent)
+            registry = get_tool_registry()
 
-            next_step = _append_log(
-                db_session, run_id, next_step, "system",
-                f"Calling {agent.model_provider}/{agent.target_model} via adapter\u2026",
-            )
+            async for event in run_agent_session(
+                session_id=run_id,
+                user_prompt=prompt,
+                db=db_session,
+                adapter=adapter,
+                registry=registry,
+                persist_user_prompt=False,
+            ):
+                await publish_session_event(run_id, event)
 
-            llm_response = await adapter.generate(
-                messages=messages,
-                tools=tool_schemas if tool_schemas else None,
-            )
-
-            tool_calls_data = (
-                [tc.model_dump() for tc in llm_response.tool_calls]
-                if llm_response.tool_calls
-                else None
-            )
-
-            db_session.add(
-                ExecutionLog(
-                    session_id=run_id,
-                    step_sequence=next_step,
-                    role="assistant",
-                    content=llm_response.content,
-                    tool_calls=tool_calls_data,
-                    prompt_tokens=llm_response.prompt_tokens,
-                    completion_tokens=llm_response.completion_tokens,
-                )
-            )
-
-            run_session.status = "completed"
-            run_session.end_time = datetime.now(timezone.utc)
-            await db_session.commit()
+            refreshed_session = await db_session.get(Session, run_id)
+            return {
+                "session_id": session_id,
+                "status": refreshed_session.status if refreshed_session is not None else "completed",
+            }
     except Exception as exc:
-        await _mark_run_failed(run_id, str(exc))
+        error_log = await _mark_run_failed(run_id, str(exc))
+        error_event: dict[str, Any] = {
+            "event": "error",
+            "data": {"message": f"Run failed in background worker: {exc}"},
+        }
+        done_event: dict[str, Any] = {
+            "event": "done",
+            "data": {"session_id": session_id, "status": "failed"},
+        }
+        if error_log is not None:
+            error_event["step_sequence"] = error_log.step_sequence
+            error_event["data"].update(
+                {
+                    "log_id": str(error_log.id),
+                    "created_at": error_log.created_at.isoformat(),
+                }
+            )
+            done_event["step_sequence"] = error_log.step_sequence
+
+        try:
+            await publish_session_event(run_id, error_event)
+            await publish_session_event(run_id, done_event)
+        except Exception:
+            pass
         raise
 
     return {"session_id": session_id, "status": "completed"}
@@ -191,3 +150,4 @@ class WorkerSettings:
     redis_settings = get_redis_settings()
     queue_name = settings.ARQ_QUEUE_NAME
     max_jobs = settings.ARQ_MAX_JOBS
+    job_timeout = 300

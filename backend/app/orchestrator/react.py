@@ -24,10 +24,17 @@ EventPayload = dict[str, Any]
 ConversationMessage = dict[str, Any]
 
 
-def _build_event(event: str, data: Any | None = None) -> EventPayload:
+def _build_event(
+    event: str,
+    data: Any | None = None,
+    *,
+    step_sequence: int | None = None,
+) -> EventPayload:
     payload: EventPayload = {"event": event}
     if data is not None:
         payload["data"] = data
+    if step_sequence is not None:
+        payload["step_sequence"] = step_sequence
     return payload
 
 
@@ -125,6 +132,13 @@ def _iter_text_chunks(text: str, chunk_size: int = 48) -> Iterator[str]:
         yield text[start : start + chunk_size]
 
 
+def _log_metadata(log_entry: ExecutionLog) -> dict[str, str]:
+    return {
+        "log_id": str(log_entry.id),
+        "created_at": log_entry.created_at.isoformat(),
+    }
+
+
 async def _persist_execution_log(
     db: AsyncSession,
     *,
@@ -135,20 +149,20 @@ async def _persist_execution_log(
     tool_calls: dict[str, Any] | list[dict[str, Any]] | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
-) -> int:
-    db.add(
-        ExecutionLog(
-            session_id=session_id,
-            step_sequence=step_sequence,
-            role=role,
-            content=content,
-            tool_calls=tool_calls,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
+) -> ExecutionLog:
+    log_entry = ExecutionLog(
+        session_id=session_id,
+        step_sequence=step_sequence,
+        role=role,
+        content=content,
+        tool_calls=tool_calls,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
+    db.add(log_entry)
     await db.commit()
-    return step_sequence + 1
+    await db.refresh(log_entry)
+    return log_entry
 
 
 async def _safe_rollback(db: AsyncSession) -> None:
@@ -163,18 +177,18 @@ async def _persist_terminal_error(
     *,
     session_id: UUID,
     message: str,
-) -> None:
+) -> ExecutionLog | None:
     await _safe_rollback(db)
 
     try:
         run_session = await db.get(Session, session_id)
         if run_session is None:
-            return
+            return None
 
         run_session.status = "failed"
         run_session.end_time = datetime.now(timezone.utc)
         next_step_sequence = await _get_next_step_sequence(db, session_id)
-        await _persist_execution_log(
+        return await _persist_execution_log(
             db,
             session_id=session_id,
             step_sequence=next_step_sequence,
@@ -184,6 +198,7 @@ async def _persist_terminal_error(
     except Exception:
         logger.exception("Failed to persist terminal error for session %s.", session_id)
         await _safe_rollback(db)
+        return None
 
 
 async def run_agent_session(
@@ -192,12 +207,14 @@ async def run_agent_session(
     db: AsyncSession,
     adapter: BaseLLMAdapter,
     registry: ToolRegistry,
+    *,
+    persist_user_prompt: bool = True,
 ) -> AsyncGenerator[EventPayload, None]:
     try:
         run_session = await _load_session_with_agent(db, session_id)
         if run_session is None:
-            yield _build_event("error", "Session not found.")
-            yield _build_event("done")
+            yield _build_event("error", {"message": "Session not found."})
+            yield _build_event("done", {"session_id": str(session_id), "status": "failed"})
             return
 
         conversation_history = _build_conversation_history(run_session)
@@ -205,33 +222,56 @@ async def run_agent_session(
         tool_name_to_function = _build_tool_name_to_function(run_session.agent)
         next_step_sequence = await _get_next_step_sequence(db, session_id)
 
-        run_session.status = "running"
-        next_step_sequence = await _persist_execution_log(
-            db,
-            session_id=session_id,
-            step_sequence=next_step_sequence,
-            role="user",
-            content=user_prompt,
-        )
-        conversation_history.append({"role": "user", "content": user_prompt})
+        if run_session.status != "running" or run_session.end_time is not None:
+            run_session.status = "running"
+            run_session.end_time = None
+            await db.commit()
+
+        if persist_user_prompt:
+            user_log = await _persist_execution_log(
+                db,
+                session_id=session_id,
+                step_sequence=next_step_sequence,
+                role="user",
+                content=user_prompt,
+            )
+            next_step_sequence = user_log.step_sequence + 1
+            conversation_history.append({"role": "user", "content": user_prompt})
+            yield _build_event(
+                "user_message",
+                {
+                    "id": str(user_log.id),
+                    "content": user_prompt,
+                    **_log_metadata(user_log),
+                },
+                step_sequence=user_log.step_sequence,
+            )
 
         for _ in range(MAX_ITERATIONS):
             try:
-                print(f"DEBUG: Tools fetched from DB: {tool_schemas}")
                 llm_response = await adapter.generate(
                     messages=conversation_history,
                     tools=tool_schemas or None,
                 )
             except LLMAdapterError as exc:
                 message = f"Adapter error: {exc}"
-                await _persist_terminal_error(db, session_id=session_id, message=message)
-                yield _build_event("error", message)
-                yield _build_event("done")
+                error_log = await _persist_terminal_error(db, session_id=session_id, message=message)
+                error_data: dict[str, Any] = {"message": message}
+                error_step_sequence: int | None = None
+                if error_log is not None:
+                    error_data.update(_log_metadata(error_log))
+                    error_step_sequence = error_log.step_sequence
+                yield _build_event("error", error_data, step_sequence=error_step_sequence)
+                yield _build_event(
+                    "done",
+                    {"session_id": str(session_id), "status": "failed"},
+                    step_sequence=error_step_sequence,
+                )
                 return
 
             if llm_response.tool_calls:
                 serialized_tool_calls = _serialize_tool_calls(llm_response.tool_calls)
-                next_step_sequence = await _persist_execution_log(
+                assistant_log = await _persist_execution_log(
                     db,
                     session_id=session_id,
                     step_sequence=next_step_sequence,
@@ -241,21 +281,38 @@ async def run_agent_session(
                     prompt_tokens=llm_response.prompt_tokens,
                     completion_tokens=llm_response.completion_tokens,
                 )
+                next_step_sequence = assistant_log.step_sequence + 1
                 assistant_message: ConversationMessage = {
                     "role": "assistant",
                     "tool_calls": serialized_tool_calls,
                 }
                 if llm_response.content:
                     assistant_message["content"] = llm_response.content
+                    yield _build_event(
+                        "assistant_message",
+                        {
+                            "id": str(assistant_log.id),
+                            "content": llm_response.content,
+                            **_log_metadata(assistant_log),
+                        },
+                        step_sequence=assistant_log.step_sequence,
+                    )
                 conversation_history.append(assistant_message)
 
                 for tool_call in llm_response.tool_calls:
-                    yield _build_event("tool_call", tool_call.model_dump())
+                    yield _build_event(
+                        "tool_call",
+                        {
+                            **tool_call.model_dump(),
+                            **_log_metadata(assistant_log),
+                        },
+                        step_sequence=assistant_log.step_sequence,
+                    )
 
                     registry_name = tool_name_to_function.get(tool_call.name, tool_call.name)
                     tool_result = await registry.execute(registry_name, tool_call.arguments)
                     tool_content = json.dumps(tool_result)
-                    next_step_sequence = await _persist_execution_log(
+                    tool_log = await _persist_execution_log(
                         db,
                         session_id=session_id,
                         step_sequence=next_step_sequence,
@@ -266,6 +323,7 @@ async def run_agent_session(
                             "tool_call_id": tool_call.id,
                         },
                     )
+                    next_step_sequence = tool_log.step_sequence + 1
                     conversation_history.append(
                         {
                             "role": "tool",
@@ -280,7 +338,9 @@ async def run_agent_session(
                             "id": tool_call.id,
                             "name": tool_call.name,
                             "result": tool_result,
+                            **_log_metadata(tool_log),
                         },
+                        step_sequence=tool_log.step_sequence,
                     )
 
                 continue
@@ -288,7 +348,7 @@ async def run_agent_session(
             if llm_response.content:
                 run_session.status = "completed"
                 run_session.end_time = datetime.now(timezone.utc)
-                await _persist_execution_log(
+                assistant_log = await _persist_execution_log(
                     db,
                     session_id=session_id,
                     step_sequence=next_step_sequence,
@@ -298,23 +358,71 @@ async def run_agent_session(
                     completion_tokens=llm_response.completion_tokens,
                 )
                 for chunk in _iter_text_chunks(llm_response.content):
-                    yield _build_event("token", chunk)
-                yield _build_event("done")
+                    yield _build_event(
+                        "token",
+                        {
+                            "id": str(assistant_log.id),
+                            "chunk": chunk,
+                            **_log_metadata(assistant_log),
+                        },
+                        step_sequence=assistant_log.step_sequence,
+                    )
+                yield _build_event(
+                    "assistant_message",
+                    {
+                        "id": str(assistant_log.id),
+                        "content": llm_response.content,
+                        **_log_metadata(assistant_log),
+                    },
+                    step_sequence=assistant_log.step_sequence,
+                )
+                yield _build_event(
+                    "done",
+                    {"session_id": str(session_id), "status": "completed"},
+                    step_sequence=assistant_log.step_sequence,
+                )
                 return
 
             message = "LLM response did not include text or tool calls."
-            await _persist_terminal_error(db, session_id=session_id, message=message)
-            yield _build_event("error", message)
-            yield _build_event("done")
+            error_log = await _persist_terminal_error(db, session_id=session_id, message=message)
+            error_data: dict[str, Any] = {"message": message}
+            error_step_sequence: int | None = None
+            if error_log is not None:
+                error_data.update(_log_metadata(error_log))
+                error_step_sequence = error_log.step_sequence
+            yield _build_event("error", error_data, step_sequence=error_step_sequence)
+            yield _build_event(
+                "done",
+                {"session_id": str(session_id), "status": "failed"},
+                step_sequence=error_step_sequence,
+            )
             return
 
         message = f"Maximum iterations exceeded ({MAX_ITERATIONS})."
-        await _persist_terminal_error(db, session_id=session_id, message=message)
-        yield _build_event("error", message)
-        yield _build_event("done")
+        error_log = await _persist_terminal_error(db, session_id=session_id, message=message)
+        error_data: dict[str, Any] = {"message": message}
+        error_step_sequence: int | None = None
+        if error_log is not None:
+            error_data.update(_log_metadata(error_log))
+            error_step_sequence = error_log.step_sequence
+        yield _build_event("error", error_data, step_sequence=error_step_sequence)
+        yield _build_event(
+            "done",
+            {"session_id": str(session_id), "status": "failed"},
+            step_sequence=error_step_sequence,
+        )
     except Exception as exc:
         logger.exception("Unexpected failure while running agent session %s.", session_id)
         message = f"Run failed: {exc}"
-        await _persist_terminal_error(db, session_id=session_id, message=message)
-        yield _build_event("error", message)
-        yield _build_event("done")
+        error_log = await _persist_terminal_error(db, session_id=session_id, message=message)
+        error_data: dict[str, Any] = {"message": message}
+        error_step_sequence: int | None = None
+        if error_log is not None:
+            error_data.update(_log_metadata(error_log))
+            error_step_sequence = error_log.step_sequence
+        yield _build_event("error", error_data, step_sequence=error_step_sequence)
+        yield _build_event(
+            "done",
+            {"session_id": str(session_id), "status": "failed"},
+            step_sequence=error_step_sequence,
+        )

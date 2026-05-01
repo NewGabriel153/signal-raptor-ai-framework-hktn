@@ -33,6 +33,7 @@ class RunEnqueueResponse(BaseModel):
     job_id: str
     status: str
     message: str
+    last_step_sequence: Optional[int] = None
 
 
 class ExecutionLogRead(BaseModel):
