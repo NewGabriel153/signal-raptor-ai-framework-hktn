@@ -1,7 +1,7 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { defineStore } from 'pinia';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 const SESSION_LOAD_TIMEOUT_MS = 15000;
 const STALE_STREAM_TIMEOUT_MS = 30000;
 
