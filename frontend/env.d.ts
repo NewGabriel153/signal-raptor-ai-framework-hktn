@@ -6,6 +6,7 @@ declare module '*.vue' {
 
 interface ImportMetaEnv {
   VITE_API_URL: string;
+  VITE_API_BASE_URL: string;
 }
 
 interface ImportMeta {
