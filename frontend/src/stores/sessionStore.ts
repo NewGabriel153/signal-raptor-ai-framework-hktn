@@ -602,7 +602,7 @@ export const useSessionStore = defineStore('session', {
 
     async fetchAgents() {
       try {
-        const response = await fetch(`${API_BASE_URL}/agents`);
+        const response = await fetch(`${API_BASE_URL}/agents/`);
         if (!response.ok) {
           throw new Error(`Failed to load agents (${response.status}).`);
         }
