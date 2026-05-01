@@ -15,10 +15,14 @@
         format json
     }
 
-    reverse_proxy /api/* {$BACKEND_URL:http://localhost:8000}
+    handle /api/* {
+        reverse_proxy {$BACKEND_URL:http://localhost:8000}
+    }
 
-    root * dist
-    encode gzip
-    file_server
-    try_files {path} /index.html
+    handle {
+        root * dist
+        encode gzip
+        try_files {path} /index.html
+        file_server
+    }
 }
